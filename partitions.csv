@@ -1,0 +1,17 @@
+# Partition table for the 4 MB ESP32-C6 gateway.
+#
+# ESPHome's default gives each OTA app slot 0x1C0000 (1.75 MB) and NVS
+# 0x70000; this firmware fills ~90% of that. NVS only holds the trap
+# bindings and a few settings, so shrink it and give the app slots
+# 0x1F0000 (1.94 MB) each. A partition table is only written by a USB
+# flash (`make flash`); OTA keeps the table the gateway already has and
+# still works as long as the image fits its app slot. The first USB flash
+# with this table also moves NVS, so the gateway forgets its traps once
+# and rediscovers them.
+#
+# Name,     Type, SubType, Offset,   Size
+otadata,    data, ota,     0x9000,   0x2000
+phy_init,   data, phy,     0xB000,   0x1000
+app0,       app,  ota_0,   0x10000,  0x1F0000
+app1,       app,  ota_1,   0x200000, 0x1F0000
+nvs,        data, nvs,     0x3F0000, 0x10000

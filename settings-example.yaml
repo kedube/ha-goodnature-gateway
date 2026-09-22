@@ -1,0 +1,70 @@
+# Copy to settings.yaml and edit. Every knob for a normal setup lives
+# here; goodnature-gateway.yaml never needs editing.
+
+substitutions:
+  # Identity ------------------------------------------------------------
+  device_name: "goodnature-gateway"      # hostname / ESPHome node name
+  friendly_name: "Goodnature Gateway"    # shown in Home Assistant
+  device_description: "BLE gateway for Goodnature traps"
+  device_area: "Garden"
+
+  # Hardware ------------------------------------------------------------
+  board: "esp32-c6-devkitc-1"            # any ESP32-C6 board id from ESPHome
+  flash_size: "4MB"
+
+  # Flashing ------------------------------------------------------------
+  # Serial port for USB flashing and serial logs. Leave "" to be prompted.
+  #   macOS:   /dev/cu.usbmodem1101  (native USB)  or /dev/cu.usbserial-XXXX
+  #   Linux:   /dev/ttyACM0 or /dev/ttyUSB0
+  #   Windows: COM5
+  upload_port: ""
+  upload_speed: "460800"                 # esptool baud; drop to 115200 for flaky cables
+  # Where OTA updates and network logs go once the gateway is on Wi-Fi.
+  # Hostname (mDNS) by default; set the IP if you use manual_ip or mDNS
+  # does not cross your network.
+  ota_address: "${device_name}.local"
+
+  # Trap slots ------------------------------------------------------------
+  # max_traps is the ceiling: slots are compiled into the firmware and each
+  # one costs ~28 entities of RAM. Home Assistant only sees the slots that
+  # hold a trap (at least one). Traps are bound to slots automatically as
+  # they are discovered, and the gateway restarts itself when a new slot
+  # comes into use so Home Assistant gains the device, no reflash needed.
+  max_traps: "8"
+  slot_name_prefix: "Goodnature Trap"    # devices are "<prefix> 1", "<prefix> 2", ...
+
+  # Polling --------------------------------------------------------------
+  # Minimum time between GATT polls of the same trap. A24 traps sleep, so
+  # they are polled when heard, at most this often. "0s" disables it.
+  poll_interval: "15min"
+  write_time_on_connect: "true"          # sync the trap clock like the app does
+
+  # Consumables ------------------------------------------------------------
+  lure_life_days: "180"                  # donut life; per-trap "Lure Life" number overrides
+  co2_capacity: "24"                     # shots per CO2 canister (A24)
+  co2_low_threshold: "4"                 # "CO2 Low" at or below this many shots
+
+  # Behaviour --------------------------------------------------------------
+  # Clear the kill alert on the trap automatically after the gateway has
+  # reported it (A24: acknowledge kill/event pointers; C20: CLEAR command).
+  # Leave off if you want the alert to stay until you press Clear Kill Alert.
+  auto_acknowledge: "false"
+
+  # A24 battery ------------------------------------------------------------
+  # The A24 reports a raw battery value (FAD1) of unknown units. Once you
+  # have seen the raw value on a fresh and on a flat battery, enter them
+  # here to get a Battery % and Battery Low for A24 traps. 0/0 = disabled.
+  a24_battery_empty_raw: "0"
+  a24_battery_full_raw: "0"
+  a24_battery_low_percent: "15"
+
+  # Presence ---------------------------------------------------------------
+  offline_timeout_a24: "24h"             # A24s sleep between events
+  offline_timeout_c20: "15min"           # C20s advertise constantly
+
+  # Discovery ------------------------------------------------------------
+  discovery: "true"                      # initial state of the Trap Discovery switch
+
+  # Logging ----------------------------------------------------------------
+  log_level: "INFO"                      # DEBUG when collecting a capture for an issue
+  ble_max_connections: "3"               # 1 is used by the gateway; leave room for a proxy

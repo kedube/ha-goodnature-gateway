@@ -3,3 +3,4 @@ settings.yaml
 .esphome/
 __pycache__/
 *.pyc
+.DS_Store

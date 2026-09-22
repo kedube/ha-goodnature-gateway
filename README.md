@@ -1,6 +1,6 @@
 # ESPHome Goodnature BLE Gateway
 
-Monitor [Goodnature](https://goodnature.co.nz) A24 Smart Traps and Mouse Traps in Home Assistant with an ESP32-C6 running [ESPHome](https://esphome.io). Put the gateway near your traps and it discovers them, tracks strikes, battery and consumables, and exposes **each trap as its own Home Assistant device**. Fully local: no cloud, no app.
+Monitor [Goodnature](https://goodnature.co.nz) A24 Smart Traps and Mouse Traps in Home Assistant with an ESP32-C6 or ESP32-S3 running [ESPHome](https://esphome.io). Put the gateway near your traps and it discovers them, tracks strikes, battery and consumables, and exposes **each trap as its own Home Assistant device**. Fully local: no cloud, no app.
 
 > **Status: experimental.** The protocol layer is ported from the
 > [ha-goodnature](https://github.com/codyc1515/ha-goodnature) integration and
@@ -19,7 +19,7 @@ Goodnature traps use Bluetooth Low Energy. This project reimplements the app's p
 
 ## Requirements
 
-- **ESP32-C6 or ESP32-S3** board. `settings.yaml` has a ready-made block for each; the default is `esp32-c6-devkitc-1`. Both are compiled and sized here. Other BLE-capable ESP32s should work by setting `board`, `variant`, `flash_size` and `partitions` to match.
+- **ESP32-C6 or ESP32-S3** board. `settings.yaml` has a ready-made block for each; the default is `esp32-c6-devkitc-1`. Both have been run on hardware. Other BLE-capable ESP32s should work by setting `board`, `variant`, `flash_size` and `partitions` to match.
 - **ESPHome 2025.12.0 or newer.** The YAML sets `min_version: 2025.12.0` and older versions refuse to build. Developed against 2026.8.
 - **Home Assistant 2025.6 or newer** with the ESPHome integration, so sub-devices appear as separate devices.
 

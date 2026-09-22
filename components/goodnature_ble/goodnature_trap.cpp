@@ -146,8 +146,9 @@ void GoodnatureTrap::register_with_app() {
     App.register_number(this->lure_life_number_);
   if (this->strike_event_ != nullptr)
     App.register_event(this->strike_event_);
-  if (model != Model::UNKNOWN)
+  if (model != Model::UNKNOWN) {
     ESP_LOGD(TAG, "Slot %u: entity set registered for %s", this->index_ + 1, model_name(model));
+  }
 }
 
 void GoodnatureTrap::setup() {

@@ -9,8 +9,29 @@ substitutions:
   device_area: "Garden"
 
   # Hardware ------------------------------------------------------------
+  # Pick one of the blocks below. board/variant/flash_size/partitions must
+  # agree with each other and with the board you actually have.
+  #
+  # ESP32-C6 (default, 4 MB):
   board: "esp32-c6-devkitc-1"            # any ESP32-C6 board id from ESPHome
+  variant: "esp32c6"
   flash_size: "4MB"
+  partitions: "partitions.csv"           # 1.94 MB app slots
+  #
+  # ESP32-S3, 4 MB - comment out the C6 block above and uncomment these:
+  # board: "esp32-s3-devkitc-1"          # any ESP32-S3 board id from ESPHome
+  # variant: "esp32s3"
+  # flash_size: "4MB"
+  # partitions: "partitions.csv"         # 1.94 MB app slots
+  #
+  # ESP32-S3, 8 MB (e.g. ESP32-S3-DevKitC-1-N8):
+  # board: "esp32-s3-devkitc-1"
+  # variant: "esp32s3"
+  # flash_size: "8MB"
+  # partitions: "partitions-8mb.csv"     # 3.94 MB app slots
+  #
+  # Check your board's actual flash size; flash_size and partitions must
+  # agree or the image will not fit.
 
   # Flashing ------------------------------------------------------------
   # Serial port for USB flashing and serial logs. Leave "" to be prompted.

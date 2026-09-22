@@ -1,0 +1,20 @@
+# Partition table for an 8 MB gateway (e.g. ESP32-S3-DevKitC-1-N8).
+#
+# Same idea as partitions.csv but with the extra flash spent on the app
+# slots: 0x3F0000 (3.94 MB) each, so there is plenty of headroom over the
+# ~1.6 MB image. NVS only holds trap bindings and a few settings, so it
+# stays at 0x10000. A partition table is only written by a USB flash
+# (`make flash`); OTA keeps the table the gateway already has and still
+# works as long as the image fits its app slot. The first USB flash with
+# this table also moves NVS, so the gateway forgets its traps once and
+# rediscovers them.
+#
+# Select it with `partitions: "partitions-8mb.csv"` and `flash_size: "8MB"`
+# in settings.yaml.
+#
+# Name,     Type, SubType, Offset,   Size
+otadata,    data, ota,     0x9000,   0x2000
+phy_init,   data, phy,     0xB000,   0x1000
+app0,       app,  ota_0,   0x10000,  0x3F0000
+app1,       app,  ota_1,   0x400000, 0x3F0000
+nvs,        data, nvs,     0x7F0000, 0x10000

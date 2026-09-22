@@ -1,4 +1,4 @@
-# Goodnature trap BLE gateway for ESP32-C6.
+# Goodnature trap BLE gateway for ESP32-C6 or ESP32-S3.
 #
 # This file is the complete gateway configuration and never needs editing
 # for a normal setup. It includes two files you create from the examples:
@@ -45,11 +45,12 @@ esphome:
 
 esp32:
   board: ${board}
-  variant: esp32c6
+  variant: ${variant}
   flash_size: ${flash_size}
-  # Larger OTA app slots than ESPHome's default; see partitions.csv. Applied
-  # by the next USB flash, and harmless over OTA until then.
-  partitions: partitions.csv
+  # Larger OTA app slots than ESPHome's default; see the partition tables.
+  # Applied by the next USB flash, and harmless over OTA until then. Must
+  # match flash_size: partitions.csv for 4 MB, partitions-8mb.csv for 8 MB.
+  partitions: ${partitions}
   framework:
     type: esp-idf
     # Keep the GATT cache out of flash: traps change handles between

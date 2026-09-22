@@ -1,6 +1,6 @@
 # ESPHome Goodnature BLE Gateway
 
-Monitor [Goodnature](https://goodnature.co.nz) A24 and Mouse Trap traps in Home Assistant with an ESP32-C6 running [ESPHome](https://esphome.io). Put the gateway near your traps and it discovers them, tracks strikes, battery and consumables, and exposes **each trap as its own Home Assistant device**. Fully local: no cloud, no app.
+Monitor [Goodnature](https://goodnature.co.nz) A24 Smart Traps and Mouse Traps in Home Assistant with an ESP32-C6 running [ESPHome](https://esphome.io). Put the gateway near your traps and it discovers them, tracks strikes, battery and consumables, and exposes **each trap as its own Home Assistant device**. Fully local: no cloud, no app.
 
 > **Status: experimental.** The protocol layer is ported from the
 > [ha-goodnature](https://github.com/codyc1515/ha-goodnature) integration and
@@ -19,7 +19,7 @@ Goodnature traps use Bluetooth Low Energy. This project reimplements the app's p
 
 ## Requirements
 
-- **ESP32-C6** board. The YAML targets `esp32-c6-devkitc-1`; change `board:` for another C6. Other BLE-capable ESP32s should work with a matching `esp32:` block but have not been sized.
+- **ESP32-C6 or ESP32-S3** board. `settings.yaml` has a ready-made block for each; the default is `esp32-c6-devkitc-1`. Both are compiled and sized here. Other BLE-capable ESP32s should work by setting `board`, `variant`, `flash_size` and `partitions` to match.
 - **ESPHome 2025.12.0 or newer.** The YAML sets `min_version: 2025.12.0` and older versions refuse to build. Developed against 2026.8.
 - **Home Assistant 2025.6 or newer** with the ESPHome integration, so sub-devices appear as separate devices.
 
@@ -56,7 +56,15 @@ make logs           # follow the log over the network
 
 The Makefile only adds `--device` to `esphome run`, so calling ESPHome directly works too. `upload_speed` and `ota_address` (default `<device_name>.local`; use the IP if mDNS is unreliable) also live in `settings.yaml`.
 
-The YAML ships its own partition table (`partitions.csv`, 1.94 MB app slots) because the firmware is large. Partition tables only change on a USB flash, and the first flash with this one moves the settings area, so the gateway forgets its traps once.
+**Board choice.** The hardware block in `settings.yaml` sets `board`, `variant`, `flash_size` and `partitions` together; uncomment the block for your board and comment out the other. The four values must agree, so check your board's real flash size.
+
+| Board | `variant` | `flash_size` | `partitions` |
+|---|---|---|---|
+| ESP32-C6 DevKitC-1 (default) | `esp32c6` | `4MB` | `partitions.csv` |
+| ESP32-S3, 4 MB | `esp32s3` | `4MB` | `partitions.csv` |
+| ESP32-S3-DevKitC-1-N8, 8 MB | `esp32s3` | `8MB` | `partitions-8mb.csv` |
+
+The project ships its own partition tables because the firmware is large: `partitions.csv` gives 1.94 MB app slots on 4 MB flash, `partitions-8mb.csv` gives 3.94 MB on 8 MB. Partition tables only change on a USB flash, and the first flash with one moves the settings area, so the gateway forgets its traps once.
 
 ### 4. Add to Home Assistant
 
@@ -201,6 +209,7 @@ For a capture to attach to an issue, set `logger.level: DEBUG` and `logs: { good
 | Path | Contents |
 |---|---|
 | `goodnature-gateway.yaml` | Complete gateway config. |
+| `partitions.csv`, `partitions-8mb.csv` | Partition tables for 4 MB and 8 MB boards. |
 | `Makefile` | `make flash`, `make ota`, `make logs`, `make test`; reads the port and OTA address from `settings.yaml`. |
 | `settings-example.yaml`, `secrets-example.yaml` | Templates for `settings.yaml` and `secrets.yaml`. |
 | `components/goodnature_ble/` | The ESPHome external component (Python codegen + C++). |

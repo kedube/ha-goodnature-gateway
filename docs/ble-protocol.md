@@ -1,6 +1,6 @@
 # Goodnature BLE protocol reference
 
-Condensed from the [ha-goodnature](https://github.com/codyc1515/ha-goodnature) integration (`protocol.py`, `coordinator.py`). Everything here is reverse engineered and may vary by firmware.
+Reverse engineered from gateway captures, this gateway's parser, and the [ha-goodnature](https://github.com/codyc1515/ha-goodnature) integration. The A24 examples below came from one Smart Cap running firmware 1.3.0. Treat layouts not marked **observed** as working interpretations that may vary by firmware.
 
 ## Discovery
 
@@ -17,9 +17,23 @@ Model classification:
 |---|---|
 | `E010`, Nordic UART service, or Memfault service in the advertisement | C20 |
 | `D00D` or `D2ED` | A24 |
+| name `GN` with `0x1234` but no C20 marker | A24 (observed on firmware 1.3.0) |
 | 9-byte Nordic manufacturer payload with `0x600D` | C20 |
 
 All Goodnature custom UUIDs use the base `0000XXXX-1212-efde-1523-785fef13d123`.
+
+### A24 advertisement observed on firmware 1.3.0
+
+The captured trap used a random BLE address, advertised the local name `GN` padded with NUL bytes, and listed six 16-bit UUID values. It did **not** advertise a 128-bit A24 service UUID. One complete advertising payload was:
+
+```text
+02 01 06                         flags
+0D 03 44 23 26 97 26 00 34 12 00 00 00 00
+                                  complete 16-bit UUID list
+05 09 47 4E 00 00                complete local name: GN\0\0
+```
+
+The first two UUID slots contain `44 23 26 97`, yielding serial `97262344` when displayed in reverse byte order. The next four slots are **not** stable measurements: another packet from the same trap contained `26 00 34 12 FD D8 00 01`. Their meanings are unknown; do not derive strikes, battery, or firmware from them. `0x1234` in the fourth slot and the `GN` name are useful discovery markers for this profile. A burst of advertisements can indicate activity, but only a GATT read confirms the strike counter.
 
 ## C20 advertisement (manufacturer data, 9 bytes)
 
@@ -33,38 +47,51 @@ All Goodnature custom UUIDs use the base `0000XXXX-1212-efde-1523-785fef13d123`.
 
 Captured Mouse Trap payloads: `477fd0b2 00 04 0e00 04` (serial B2D07F47, 14 strikes) and `8479d0b2 00 04 0300 04` (serial B2D07984, 3 strikes). `tools/gateway_inspect.py decode <hex>` prints the decoded fields.
 
-## A24 GATT
+## A24 GATT (Smart Cap firmware 1.3.0)
 
-| Short UUID | Role | Format |
+Custom short IDs in this section expand into `0000XXXX-1212-efde-1523-785fef13d123`. The following services and characteristics were **observed** in one GATT discovery. `R`, `W`, `N`, and `I` mean read, write, notify, and indicate. Handles can change on other firmware.
+
+| Service | Characteristics: handle (properties) | Gateway interpretation |
 |---|---|---|
-| `DE11` | device information service | |
-| `DE12` | serial number | string |
-| `DE13` | device control | u8, writable. `0x02` acknowledge, `0x05` test fire |
-| `DE14` | device state | raw u16 |
-| `DE15` | firmware version | string |
-| `DE16` | device config | raw |
-| `D00D` | kill service | |
-| `D20D` | kill displayed counter | u16 LE, also written back to select a strike record |
-| `D30D` | strike record | 12+ bytes: `[5]` flags, `[6..9]` minutes since epoch u32 LE, `[10..11]` strike id u16 LE. Sometimes ASCII-hex encoded |
-| `D50D` | kill state | raw u16 |
-| `D60D` | kill read pointer | u16 LE, writable |
-| `D2ED` | event displayed counter | u16 LE |
-| `DEED` | event payload | raw |
-| `D3ED` | event read pointer | u16 LE, writable |
-| `FADE` | battery service | |
-| `FAD1` | battery voltage | raw u16 |
-| `FAD2` | battery internal resistance | raw u16 |
-| `FAD3` | unknown | raw u16 |
-| `F1AE` | time service | |
-| `F1AF` | time | u32 LE minutes since epoch, writable |
+| `1800` Generic Access | `2A00`: 0003 (RW), `2A01`: 0005 (R), `2A04`: 0007 (R), `2AA6`: 0009 (R) | Standard BLE service |
+| `1801` Generic Attribute | `2A05`: 000C (I) | Standard BLE service |
+| `E770` | `E771`: 0010 (RWN), `E773`: 0013 (RWN), `E772`: 0016 (RN) | Unknown |
+| `FADE` | `FAD1`: 001A (RN), `FAD2`: 001D (RN) | Battery telemetry, units unknown |
+| `F1AE` | `F1AF`: 0021 (RWN) | Time |
+| `DE11` | `DE12`: 0025 (RN), `DE13`: 0028 (RWN), `DE14`: 002B (RN), `DE15`: 002E (RN), `DE16`: 0031 (RWN), `DE17`: 0034 (RWN) | Identity, control, state, configuration |
+| `D00D` | `D20D`: 0038 (RWN), `D30D`: 003B (RN), `D60D`: 003E (RWN), `D50D`: 0041 (RN) | Strike counters and record |
+| `DEAD` | `DEED`: 0045 (RN), `D2ED`: 0048 (RWN), `D3ED`: 004B (RWN) | Event channel; details unconfirmed |
+| `FE59` | `8EC90003-F315-4F60-9FB8-838830DAEA50`: 004F (WI) | Separate vendor service; purpose unknown |
 
-Flows used by this gateway:
+The table gives characteristic value handles in hex. `N` denotes the advertised notify property; the gateway currently reads these characteristics instead of subscribing.
 
-- **Poll**: write `F1AF` = now/60; read `DE12`, `DE15`, `DE14`, `D20D`, `D60D`, `D30D`, `FAD1`, `FAD2`.
-- **Reset alert**: read `D20D`, `D2ED`; write `D60D` = kill displayed, `D3ED` = event displayed; write `DE13` = `0x02`; then poll.
-- **Test fire**: write `DE13` = `0x05`; wait 500 ms; read `D20D`; write it back to `D20D`; read `D30D`; then poll.
+### Values and decoding
 
-Kill alert for the A24 is `D20D > D60D`.
+| Characteristic | Observed or implemented interpretation |
+|---|---|
+| `DE12` | Serial: four binary bytes in reverse display order. `44 23 26 97` → `97262344`. The same four bytes appeared in the advertisement and strike record. |
+| `DE15` | Firmware: captured `01 03 00` → `1.3.0`. The parser also accepts `01 03` and ASCII `0103`; those formats were not captured from this trap. |
+| `D20D` | Little endian 16-bit strike counter used for **Strikes**. Reads of `1` and later `2` were observed. Whether this counter ever resets remains unverified. Writing the current value back selects a `D30D` record in the gateway's test-fire script. |
+| `D60D` | Little endian 16-bit read or acknowledged counter. A read of `1` while `D20D` was `2` produced a pending Kill Alert. The gateway uses `D20D > D60D`. |
+| `D30D` | At least 12 bytes. Example: `82 44 23 26 97 12 F7 60 C7 01 01 00`. Bytes 1–4 repeat the serial bytes; byte 5 (`12`) is retained as flags, with individual bits unknown. Bytes 6–9 are a little endian count of minutes since Unix epoch (`2026-09-28 19:03 UTC` in this sample); bytes 10–11 are a little endian strike ID (`1`). Byte 0 (`82`) has unknown meaning. The parser also accepts an ASCII hex representation, not seen in this capture. |
+| `FAD1` | One byte in this capture: `D8` (216), and later `E3` (227). The parser also accepts two bytes. Its physical units and a conversion to charge percentage are unverified. |
+| `FAD2` | One byte `FD` (253) in this capture. Meaning and units unverified; an earlier reverse engineering label was “internal resistance.” |
+| `DE14`, `D50D`, `DE16`, `DE17`, `DEED` | Present in GATT, but their values or bit fields are not decoded here. |
+| `F1AF` | Gateway writes Unix time in **minutes**, little endian 32-bit (`floor(epoch seconds / 60)`). |
+
+`D2ED` and `D3ED` are treated as the displayed and acknowledged event counters by the reset script. This interpretation and the meanings of `E770` and `FE59` need more captures. `FAD3` appears in earlier protocol notes but was **absent** from this trap's GATT table.
+
+### Gateway operations
+
+- **Poll:** if enabled and the clock is set, write `F1AF`; then read `DE12`, `DE15`, `D20D`, `FAD1`, `D60D`, `D30D`, `DE14`, `FAD2`, in that order. Missing characteristics are skipped. The A24 sleeps and may stop accepting connections before the poll finishes.
+- **Clear Kill Alert:** read `D20D` and `D2ED`; copy their values to `D60D` and `D3ED` respectively; write `02` to `DE13`; then poll. These writes are the gateway's implemented acknowledgement sequence, not a fully verified on-air trace of the app.
+- **Test Fire:** write `05` to `DE13`, wait 500 ms, read `D20D`, write that value back to `D20D`, read `D30D`, then poll. **This command fires the trap.** The sequence is implemented in the gateway but was not exercised on the captured trap.
+
+### Battery and contact state
+
+No charge percentage or low-battery threshold has been established for the observed `FAD1`/`FAD2` values. Without user-supplied raw calibration, the gateway leaves A24 **Battery %** and **Battery Low** unavailable. Its **Battery Status** text uses contact as a proxy: `Normal` if the gateway received an advertisement within the past 24 hours, `Unknown` otherwise. It does not measure charge or observe a sync performed only by the Goodnature app. **Last Seen** records the gateway's latest advertisement; a successful GATT poll is a separate event.
+
+No A24 characteristic in this capture reported CO₂ shots remaining. The gateway calculates that Home Assistant value from its configured canister capacity, a stored baseline for `D20D`, and any manual **CO₂ Shot Used** adjustments. The baseline is established when the counter first becomes known or when the user marks a new canister.
 
 ## C20 Nordic UART
 

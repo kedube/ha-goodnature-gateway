@@ -24,6 +24,9 @@ void TrapButton::press_action() {
     case TrapButtonKind::CO2_REPLACED:
       trap->mark_co2_replaced();
       break;
+    case TrapButtonKind::CO2_SHOT_USED:
+      trap->mark_co2_shot_used();
+      break;
     case TrapButtonKind::FORGET:
       hub->forget_trap(trap);
       break;

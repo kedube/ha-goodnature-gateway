@@ -57,6 +57,14 @@ class GoodnatureHub : public Component, public esp32_ble_tracker::ESPBTDeviceLis
     this->a24_battery_full_raw_ = full_raw;
     this->a24_battery_low_percent_ = low_percent;
   }
+  void set_a24_identity_hint(const std::string &mac, const std::string &serial, const std::string &firmware) {
+    this->a24_hint_mac_ = mac;
+    this->a24_hint_serial_ = serial;
+    this->a24_hint_firmware_ = firmware;
+  }
+  const std::string &a24_hint_mac() const { return this->a24_hint_mac_; }
+  const std::string &a24_hint_serial() const { return this->a24_hint_serial_; }
+  const std::string &a24_hint_firmware() const { return this->a24_hint_firmware_; }
 
   void set_traps_count_sensor(sensor::Sensor *s) { this->traps_count_sensor_ = s; }
   void set_last_discovered_text_sensor(text_sensor::TextSensor *s) { this->last_discovered_ts_ = s; }
@@ -149,6 +157,9 @@ class GoodnatureHub : public Component, public esp32_ble_tracker::ESPBTDeviceLis
   uint16_t a24_battery_empty_raw_{0};
   uint16_t a24_battery_full_raw_{0};
   uint8_t a24_battery_low_percent_{15};
+  std::string a24_hint_mac_;
+  std::string a24_hint_serial_;
+  std::string a24_hint_firmware_;
 
   // Per-address rate limit for debug advertisement logging.
   struct AdvLogEntry {

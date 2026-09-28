@@ -24,6 +24,15 @@ static const uint32_t RECENTLY_SEEN_MS = 15 * 1000;
 // for a trap that was just forgotten to rebind (which cancels the restart).
 static const uint32_t SLOTS_RESTART_DELAY_MS = 5000;
 
+static bool is_gn_name(const std::string &name) {
+  if (name.size() < 2 || name[0] != 'G' || name[1] != 'N')
+    return false;
+  for (size_t i = 2; i < name.size(); i++)
+    if (name[i] != '\0')
+      return false;
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Component lifecycle
 // ---------------------------------------------------------------------------
@@ -144,12 +153,15 @@ GoodnatureHub::Classification GoodnatureHub::classify_(const espbt::ESPBTDevice 
   static const ESPBTUUID NORDIC = ESPBTUUID::from_uint16(MFG_ID_NORDIC);
 
   Classification c;
-  bool has_a24_marker = false, has_gn_marker = false, has_600d = false, has_c20_marker = false;
+  bool has_a24_marker = false, has_gn_marker = false, has_1234 = false, has_600d = false, has_c20_marker = false;
   for (const auto &uuid : device.get_service_uuids()) {
     if (uuid == GN_D00D || uuid == GN_D2ED) {
       has_a24_marker = true;
       has_gn_marker = true;
-    } else if (uuid == GN_DE11 || uuid == GN_FADE || uuid == LEGACY_1234) {
+    } else if (uuid == GN_DE11 || uuid == GN_FADE) {
+      has_gn_marker = true;
+    } else if (uuid == LEGACY_1234) {
+      has_1234 = true;
       has_gn_marker = true;
     } else if (uuid == GN_E010) {
       has_gn_marker = true;
@@ -161,7 +173,7 @@ GoodnatureHub::Classification GoodnatureHub::classify_(const espbt::ESPBTDevice 
       has_c20_marker = true;
     }
   }
-  bool name_is_gn = device.get_name() == "GN";
+  bool name_is_gn = is_gn_name(device.get_name());
   c.is_goodnature = name_is_gn || has_gn_marker;
   if (!c.is_goodnature)
     return c;
@@ -182,12 +194,14 @@ GoodnatureHub::Classification GoodnatureHub::classify_(const espbt::ESPBTDevice 
     c.model = Model::A24;
   } else if (c.has_c20_adv && has_600d) {
     c.model = Model::C20;
+  } else if (name_is_gn && has_1234 && !has_600d && !c.has_c20_adv) {
+    c.model = Model::A24;
   }
   return c;
 }
 
 bool GoodnatureHub::looks_interesting_(const espbt::ESPBTDevice &device) {
-  if (device.get_name() == "GN")
+  if (is_gn_name(device.get_name()))
     return true;
   for (const auto &md : device.get_manufacturer_datas()) {
     if (md.uuid == esp32_ble::ESPBTUUID::from_uint16(MFG_ID_NORDIC))

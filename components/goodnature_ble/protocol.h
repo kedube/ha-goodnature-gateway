@@ -98,6 +98,8 @@ std::optional<uint32_t> parse_u32_le(const uint8_t *data, size_t len, size_t off
 // Decode a characteristic to text, stripping trailing NULs. Falls back to
 // hex when the bytes are not printable UTF-8/ASCII.
 std::string decode_text(const uint8_t *data, size_t len);
+std::string decode_a24_serial(const uint8_t *data, size_t len);
+std::string decode_a24_firmware(const uint8_t *data, size_t len);
 std::string to_hex(const uint8_t *data, size_t len);
 void put_u16_le(std::vector<uint8_t> &out, uint16_t v);
 void put_u32_le(std::vector<uint8_t> &out, uint32_t v);

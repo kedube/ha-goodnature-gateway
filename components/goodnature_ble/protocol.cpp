@@ -18,7 +18,7 @@ std::string gn_uuid_str(uint16_t short_id) {
 const char *model_name(Model model) {
   switch (model) {
     case Model::A24:
-      return "A24";
+      return "A24 Smart Trap";
     case Model::C20:
       return "Mouse Trap";
     default:
@@ -87,6 +87,33 @@ std::string decode_text(const uint8_t *data, size_t len) {
   while (end > start && s[end - 1] == ' ')
     end--;
   return s.substr(start, end - start);
+}
+
+std::string decode_a24_serial(const uint8_t *data, size_t len) {
+  if (data == nullptr || len != 4)
+    return decode_text(data, len);
+  char buf[9];
+  snprintf(buf, sizeof(buf), "%02X%02X%02X%02X", data[3], data[2], data[1], data[0]);
+  return std::string(buf);
+}
+
+std::string decode_a24_firmware(const uint8_t *data, size_t len) {
+  if (data == nullptr)
+    return decode_text(data, len);
+  if (len == 3 && data[2] == 0)
+    len = 2;
+  if (len == 4 && data[0] >= '0' && data[0] <= '9' && data[1] >= '0' && data[1] <= '9' &&
+      data[2] >= '0' && data[2] <= '9' && data[3] >= '0' && data[3] <= '9') {
+    char buf[20];
+    snprintf(buf, sizeof(buf), "%u.%u.0", static_cast<unsigned>((data[0] - '0') * 10 + data[1] - '0'),
+             static_cast<unsigned>((data[2] - '0') * 10 + data[3] - '0'));
+    return std::string(buf);
+  }
+  if (len != 2)
+    return decode_text(data, len);
+  char buf[20];
+  snprintf(buf, sizeof(buf), "%u.%u.0", data[0], data[1]);
+  return std::string(buf);
 }
 
 void put_u16_le(std::vector<uint8_t> &out, uint16_t v) {

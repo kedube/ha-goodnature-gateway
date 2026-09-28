@@ -71,7 +71,7 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    encryption:
 
 wifi:
   ssid: !secret wifi_ssid
@@ -122,6 +122,9 @@ goodnature_ble:
   a24_battery_empty_raw: ${a24_battery_empty_raw}
   a24_battery_full_raw: ${a24_battery_full_raw}
   a24_battery_low_percent: ${a24_battery_low_percent}
+  a24_hint_mac: ${a24_hint_mac}
+  a24_hint_serial: ${a24_hint_serial}
+  a24_hint_firmware: ${a24_hint_firmware}
 
 # Optional: also act as a Bluetooth proxy for Home Assistant. Costs one
 # connection slot and some radio time.
@@ -158,7 +161,7 @@ text_sensor:
     entity_category: diagnostic
     icon: mdi:tag
     lambda: return {ESPHOME_PROJECT_VERSION};
-    update_interval: never
+    update_interval: 1h
 
 button:
   - platform: restart

@@ -33,6 +33,7 @@ enum class TrapButtonKind : uint8_t {
   RESET_ALERT,
   LURE_REPLACED,
   CO2_REPLACED,
+  CO2_SHOT_USED,
   FORGET,
   LOG_DEBUG,
 };
@@ -69,10 +70,16 @@ struct TrapCache {
   uint8_t version;          // CACHE_VERSION
   uint8_t battery_percent;  // 0xFF = unknown
   uint8_t flags;            // CACHE_* bits below
-  uint8_t reserved;
+  uint8_t co2_extra_shots;  // manual shots not represented by the counter since anchoring
   uint32_t log_scanned_to;  // C20: striker log counted up to this epoch (0 = never)
   uint32_t last_full_scan;  // C20: epoch of the last replay of the whole log
   uint32_t test_fires;      // C20: USER striker events seen in the whole log
+} __attribute__((packed));
+
+struct TrapIdentity {
+  uint8_t version;
+  char serial[16];
+  char firmware[24];
 } __attribute__((packed));
 
 static constexpr uint8_t CACHE_VERSION = 1;
@@ -136,6 +143,7 @@ class GoodnatureTrap {
   void set_online_binary_sensor(binary_sensor::BinarySensor *s) { this->online_bs_ = s; }
 
   void set_model_text_sensor(text_sensor::TextSensor *s) { this->model_ts_ = s; }
+  void set_battery_status_text_sensor(text_sensor::TextSensor *s) { this->battery_status_ts_ = s; }
   void set_serial_text_sensor(text_sensor::TextSensor *s) { this->serial_ts_ = s; }
   void set_firmware_text_sensor(text_sensor::TextSensor *s) { this->firmware_ts_ = s; }
   void set_mac_text_sensor(text_sensor::TextSensor *s) { this->mac_ts_ = s; }
@@ -200,6 +208,7 @@ class GoodnatureTrap {
   // ---- consumables ----------------------------------------------------------
   void mark_lure_replaced();
   void mark_co2_replaced();
+  void mark_co2_shot_used();
   void set_lure_life_days(uint16_t days);
   uint16_t lure_life_days() const;
 
@@ -257,8 +266,11 @@ class GoodnatureTrap {
   TrapPrefs prefs_{};
   ESPPreferenceObject cache_pref_;
   TrapCache cache_{};
+  ESPPreferenceObject identity_pref_;
   void load_cache_();
   void save_cache_();
+  void load_identity_();
+  void save_identity_();
   void restore_from_cache_();
 
   // Runtime state ------------------------------------------------------------
@@ -322,7 +334,7 @@ class GoodnatureTrap {
   // Published-state caches (to avoid re-sending unchanged binary/text state)
   std::optional<bool> kill_alert_pub_, battery_low_pub_, charging_pub_, active_pub_, lure_due_pub_, co2_low_pub_,
       online_pub_;
-  std::optional<std::string> model_pub_, serial_pub_, firmware_pub_, mac_pub_, status_pub_;
+  std::optional<std::string> model_pub_, battery_status_pub_, serial_pub_, firmware_pub_, mac_pub_, status_pub_;
   std::optional<float> strikes_pub_, battery_pub_, co2_pub_, lure_age_pub_, lure_remaining_pub_, last_strike_pub_,
       last_seen_pub_, voltage_pub_;
 
@@ -344,6 +356,7 @@ class GoodnatureTrap {
   binary_sensor::BinarySensor *co2_low_bs_{nullptr};
   binary_sensor::BinarySensor *online_bs_{nullptr};
   text_sensor::TextSensor *model_ts_{nullptr};
+  text_sensor::TextSensor *battery_status_ts_{nullptr};
   text_sensor::TextSensor *serial_ts_{nullptr};
   text_sensor::TextSensor *firmware_ts_{nullptr};
   text_sensor::TextSensor *mac_ts_{nullptr};

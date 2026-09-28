@@ -6,7 +6,7 @@ substitutions:
   device_name: "goodnature-gateway"      # hostname / ESPHome node name
   friendly_name: "Goodnature Gateway"    # shown in Home Assistant
   device_description: "BLE gateway for Goodnature traps"
-  device_area: "Garden"
+  device_area: "Attic""
 
   # Hardware ------------------------------------------------------------
   # Pick one of the blocks below. board/variant/flash_size/partitions must
@@ -78,6 +78,11 @@ substitutions:
   a24_battery_empty_raw: "0"
   a24_battery_full_raw: "0"
   a24_battery_low_percent: "15"
+  # Optional identity fallback for one A24 that sleeps through GATT polls.
+  # Values are used only for the matching MAC, until actual BLE reads arrive.
+  a24_hint_mac: ""
+  a24_hint_serial: ""
+  a24_hint_firmware: ""
 
   # Presence ---------------------------------------------------------------
   offline_timeout_a24: "24h"             # A24s sleep between events

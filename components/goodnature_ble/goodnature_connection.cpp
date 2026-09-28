@@ -412,8 +412,8 @@ void GoodnatureConnection::build_ops_() {
 }
 
 void GoodnatureConnection::push_a24_poll_ops_() {
-  for (uint16_t id : {CHR_SERIAL, CHR_FIRMWARE, CHR_DEVICE_STATE, CHR_KILL_DISPLAYED, CHR_KILL_READ, CHR_KILL_PAYLOAD,
-                      CHR_BATTERY_VOLTAGE, CHR_BATTERY_RESISTANCE}) {
+  for (uint16_t id : {CHR_SERIAL, CHR_FIRMWARE, CHR_KILL_DISPLAYED, CHR_BATTERY_VOLTAGE, CHR_KILL_READ,
+                      CHR_KILL_PAYLOAD, CHR_DEVICE_STATE, CHR_BATTERY_RESISTANCE}) {
     this->ops_.push_back(Op{OpKind::READ, id});
   }
 }

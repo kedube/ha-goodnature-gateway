@@ -101,6 +101,7 @@ Every option is a substitution in `settings.yaml`, passed through to the `goodna
 | `auto_acknowledge` | `false` | Queue **Clear Kill Alert** automatically after a poll finds the alert raised. Home Assistant still sees the alert and **Strike** event first. |
 | `a24_battery_empty_raw`, `a24_battery_full_raw` | `0`, `0` | Raw A24 battery readings for flat and fresh batteries, once known. `0/0` disables the percentage. |
 | `a24_battery_low_percent` | `15` | **Battery Low** threshold for the calibrated A24 percentage. |
+| `a24_hint_mac`, `a24_hint_serial`, `a24_hint_firmware` | empty | Optional identity fallback for one A24; only the matching MAC uses it, and live BLE reads update the values. |
 
 Set only in the gateway YAML: `time_id` (a `time:` component, needed for lure timers, timestamps and clock sync) and `hub_entities` (create the gateway-level entities). `settings.yaml` also carries `device_name`, `friendly_name`, `device_description`, `device_area`, `board`, `flash_size`, `upload_port`, `upload_speed`, `ota_address`, `log_level` and `ble_max_connections`.
 
@@ -124,8 +125,8 @@ Lure and CO2 timers start when a trap is discovered, on the assumption it was ju
 | **Kill Alert** | binary, occupancy | A24: unacknowledged kills. Mouse Trap: kill state from the poll; the advertisement's unverified "strikes available" bit can raise it but never clears it. |
 | **Strike** | event | `strike` when the counter increases, `test_fire` on a Mouse Trap manual fire. Use this for automations. |
 | **Last Strike** | sensor, timestamp | A24: from the strike record, else when the counter was seen to increase. Mouse Trap: the trap's own timestamp on its last kill. |
-| **Battery** | sensor, % | A24: only with the `a24_battery_*_raw` calibration. Mouse Trap: from each poll; kept across restarts. |
-| **Battery Low** | binary, battery | A24: calibrated percentage at or below `a24_battery_low_percent`. Mouse Trap: LOW, CRITICAL or NOT_CONNECTED from advertisement and poll. |
+| **Battery** | sensor, % | A24: registered only with the `a24_battery_*_raw` calibration. Mouse Trap: from each poll; kept across restarts. |
+| **Battery Low** | binary, battery | A24: registered only with battery calibration, then on at or below `a24_battery_low_percent`. Mouse Trap: LOW, CRITICAL or NOT_CONNECTED from advertisement and poll. |
 | **Lure Age**, **Lure Remaining** | sensor, days | From **Lure Replaced** and **Lure Life**. |
 | **Lure Due** | binary, problem | On when Lure Remaining ≤ 0. |
 | **Online** | binary, connectivity | Heard within the model's offline timeout. |
@@ -144,10 +145,12 @@ Lure and CO2 timers start when a trap is discovered, on the assumption it was ju
 
 | Entity | Type | Notes |
 |---|---|---|
-| **Battery Voltage Raw** | sensor, diagnostic, disabled | Raw `FAD1` value; units unknown. Read it on a fresh and a flat battery to fill in the calibration options. |
+| **Battery Voltage Raw** | sensor, diagnostic, disabled | Raw `FAD1` value; units unknown. Firmware 1.3.0 returned a single byte. Read it on a fresh and a flat battery to fill in the calibration options. |
+| **Battery Status** | text, diagnostic | Activity proxy: `Normal` if the gateway heard the A24 within 24 hours; `Unknown` otherwise. It does not measure remaining charge or observe app-only syncs. |
 | **CO2 Shots Remaining** | sensor | `co2_capacity` minus strikes since **CO2 Canister Replaced**. |
 | **CO2 Low** | binary, problem | On at or below `co2_low_threshold`. |
 | **CO2 Canister Replaced** | button | Re-anchors the shot counter. |
+| **CO2 Shot Used** | button | Subtracts one from shots remaining when the app knows about a shot taken before the gateway anchored its counter. |
 
 #### Mouse Trap only
 

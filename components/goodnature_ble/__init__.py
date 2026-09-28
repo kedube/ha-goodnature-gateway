@@ -113,6 +113,9 @@ CONF_AUTO_ACKNOWLEDGE = "auto_acknowledge"
 CONF_A24_BATTERY_EMPTY_RAW = "a24_battery_empty_raw"
 CONF_A24_BATTERY_FULL_RAW = "a24_battery_full_raw"
 CONF_A24_BATTERY_LOW_PERCENT = "a24_battery_low_percent"
+CONF_A24_HINT_MAC = "a24_hint_mac"
+CONF_A24_HINT_SERIAL = "a24_hint_serial"
+CONF_A24_HINT_FIRMWARE = "a24_hint_firmware"
 
 UNIT_DAYS = "d"
 UNIT_SHOTS = "shots"
@@ -156,6 +159,9 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_A24_BATTERY_LOW_PERCENT, default=15): cv.int_range(
                 min=0, max=100
             ),
+            cv.Optional(CONF_A24_HINT_MAC, default=""): cv.string_strict,
+            cv.Optional(CONF_A24_HINT_SERIAL, default=""): cv.string_strict,
+            cv.Optional(CONF_A24_HINT_FIRMWARE, default=""): cv.string_strict,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -368,6 +374,12 @@ TRAP_BINARY_SENSORS = [
 
 TRAP_TEXT_SENSORS = [
     (
+        "battery_status",
+        "Battery Status",
+        "set_battery_status_text_sensor",
+        {CONF_ICON: "mdi:battery-check", CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC},
+    ),
+    (
         "model",
         "Model",
         "set_model_text_sensor",
@@ -439,6 +451,12 @@ TRAP_BUTTONS = [
         "CO2 Canister Replaced",
         "CO2_REPLACED",
         {CONF_ICON: "mdi:gas-cylinder", CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_CONFIG},
+    ),
+    (
+        "co2_shot_used",
+        "CO2 Shot Used",
+        "CO2_SHOT_USED",
+        {CONF_ICON: "mdi:minus-circle-outline", CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_CONFIG},
     ),
     (
         "reset_alert",
@@ -666,6 +684,11 @@ async def to_code(config):
             config[CONF_A24_BATTERY_LOW_PERCENT],
         )
     )
+    cg.add(hub.set_a24_identity_hint(
+        config[CONF_A24_HINT_MAC].upper(),
+        config[CONF_A24_HINT_SERIAL],
+        config[CONF_A24_HINT_FIRMWARE],
+    ))
 
     max_traps: int = config[CONF_MAX_TRAPS]
     prefix: str = config[CONF_SLOT_NAME_PREFIX]

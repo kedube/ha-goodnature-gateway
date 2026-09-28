@@ -25,7 +25,7 @@ static int checks = 0;
 static void test_uuid() {
   CHECK(gn_uuid_str(0xD00D) == "0000d00d-1212-efde-1523-785fef13d123");
   CHECK(gn_uuid_str(0xDE11) == "0000de11-1212-efde-1523-785fef13d123");
-  CHECK(std::string(model_name(Model::A24)) == "A24");
+  CHECK(std::string(model_name(Model::A24)) == "A24 Smart Trap");
   CHECK(std::string(model_name(Model::C20)) == "Mouse Trap");
   CHECK(std::string(model_name(Model::UNKNOWN)) == "Unknown");
 }
@@ -43,6 +43,14 @@ static void test_helpers() {
   uint8_t bin[] = {0x01, 0x02, 0xFF};
   CHECK(decode_text(bin, sizeof(bin)) == "0102ff");
   CHECK(decode_text(nullptr, 0) == "");
+  uint8_t a24_serial[] = {0x44, 0x23, 0x26, 0x97};
+  CHECK(decode_a24_serial(a24_serial, sizeof(a24_serial)) == "97262344");
+  uint8_t a24_fw[] = {0x01, 0x03};
+  CHECK(decode_a24_firmware(a24_fw, sizeof(a24_fw)) == "1.3.0");
+  uint8_t a24_fw_nul[] = {0x01, 0x03, 0x00};
+  CHECK(decode_a24_firmware(a24_fw_nul, sizeof(a24_fw_nul)) == "1.3.0");
+  uint8_t a24_fw_text[] = {'0', '1', '0', '3'};
+  CHECK(decode_a24_firmware(a24_fw_text, sizeof(a24_fw_text)) == "1.3.0");
 }
 
 static void test_c20_advertisement() {

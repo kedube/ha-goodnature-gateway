@@ -10,6 +10,7 @@
 #include "esphome/core/log.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace esphome::goodnature_ble {
 
@@ -99,6 +100,8 @@ void GoodnatureTrap::init_prefs() {
   uint32_t cache_key = fnv1_hash("goodnature_ble.trap_cache") + this->index_;
   this->cache_pref_ = global_preferences->make_preference<TrapCache>(cache_key, true);
   this->load_cache_();
+  uint32_t identity_key = fnv1_hash("goodnature_ble.trap_identity") + this->index_;
+  this->identity_pref_ = global_preferences->make_preference<TrapIdentity>(identity_key, true);
 }
 
 void GoodnatureTrap::register_with_app() {
@@ -107,25 +110,30 @@ void GoodnatureTrap::register_with_app() {
   // What each model lacks. An unknown model gets everything.
   bool a24 = model == Model::A24;    // CO2 powered: no charger, no armed state
   bool mouse = model == Model::C20;  // electric striker: no CO2, no raw battery voltage
+  bool battery_percent_supported = !a24 || this->hub_->a24_battery_full_raw() > this->hub_->a24_battery_empty_raw();
 #ifdef USE_DEVICES
   if (this->device_ != nullptr)
     App.register_device(this->device_);
 #endif
-  for (sensor::Sensor *s : {this->strikes_sensor_, this->battery_sensor_, this->rssi_sensor_,
+  for (sensor::Sensor *s : {this->strikes_sensor_, this->rssi_sensor_,
                             this->last_seen_sensor_, this->last_strike_sensor_, this->lure_age_sensor_,
                             this->lure_remaining_sensor_}) {
     if (s != nullptr)
       App.register_sensor(s);
   }
+  if (battery_percent_supported && this->battery_sensor_ != nullptr)
+    App.register_sensor(this->battery_sensor_);
   if (!mouse && this->battery_voltage_sensor_ != nullptr)
     App.register_sensor(this->battery_voltage_sensor_);
   if (!mouse && this->co2_remaining_sensor_ != nullptr)
     App.register_sensor(this->co2_remaining_sensor_);
   for (binary_sensor::BinarySensor *b :
-       {this->kill_alert_bs_, this->battery_low_bs_, this->lure_due_bs_, this->online_bs_}) {
+       {this->kill_alert_bs_, this->lure_due_bs_, this->online_bs_}) {
     if (b != nullptr)
       App.register_binary_sensor(b);
   }
+  if (battery_percent_supported && this->battery_low_bs_ != nullptr)
+    App.register_binary_sensor(this->battery_low_bs_);
   if (!mouse && this->co2_low_bs_ != nullptr)
     App.register_binary_sensor(this->co2_low_bs_);
   if (!a24 && this->charging_bs_ != nullptr)
@@ -137,8 +145,10 @@ void GoodnatureTrap::register_with_app() {
     if (t != nullptr)
       App.register_text_sensor(t);
   }
+  if (!mouse && this->battery_status_ts_ != nullptr)
+    App.register_text_sensor(this->battery_status_ts_);
   for (const auto &sb : this->buttons_) {
-    if (mouse && sb.kind == TrapButtonKind::CO2_REPLACED)
+    if (mouse && (sb.kind == TrapButtonKind::CO2_REPLACED || sb.kind == TrapButtonKind::CO2_SHOT_USED))
       continue;
     App.register_button(sb.button);
   }
@@ -163,6 +173,28 @@ void GoodnatureTrap::setup() {
     ESP_LOGI(TAG, "Slot %u restored: %s %s, %u strikes", this->index_ + 1, model_name(this->model()),
              this->address_str_, (unsigned) this->prefs_.strikes);
     this->restore_from_cache_();
+    this->load_identity_();
+    if (this->model() == Model::A24 && !this->firmware_.empty()) {
+      std::string decoded = decode_a24_firmware(reinterpret_cast<const uint8_t *>(this->firmware_.data()),
+                                                this->firmware_.size());
+      if (decoded != this->firmware_) {
+        this->firmware_ = decoded;
+        this->save_identity_();
+      }
+    }
+    if (this->model() == Model::A24 && this->hub_->a24_hint_mac() == this->address_str_) {
+      bool changed = false;
+      if (this->serial_.empty() && !this->hub_->a24_hint_serial().empty()) {
+        this->serial_ = this->hub_->a24_hint_serial();
+        changed = true;
+      }
+      if (this->firmware_.empty() && !this->hub_->a24_hint_firmware().empty()) {
+        this->firmware_ = this->hub_->a24_hint_firmware();
+        changed = true;
+      }
+      if (changed)
+        this->save_identity_();
+    }
     this->status_ = "Waiting for trap";
   } else {
     this->status_ = "Unassigned";
@@ -178,6 +210,13 @@ void GoodnatureTrap::load_prefs_() {
   TrapPrefs loaded{};
   if (this->pref_.load(&loaded) && loaded.address != 0) {
     this->prefs_ = loaded;
+    // Older firmware left A24s as UNKNOWN when their advertisements lacked
+    // a model UUID, even after reading the A24 strike characteristic.
+    if (this->prefs_.model == static_cast<uint8_t>(Model::UNKNOWN) && this->prefs_.serial_raw == 0 &&
+        this->prefs_.strikes_at_co2 != COUNTER_UNKNOWN) {
+      this->prefs_.model = static_cast<uint8_t>(Model::A24);
+      this->save_prefs_(true);
+    }
   } else {
     this->prefs_ = TrapPrefs{};
   }
@@ -205,6 +244,25 @@ void GoodnatureTrap::save_cache_() {
   this->cache_.flags = flags;
   if (!this->cache_pref_.save(&this->cache_))
     ESP_LOGW(TAG, "Slot %u: failed to save cached readings", this->index_ + 1);
+}
+
+void GoodnatureTrap::load_identity_() {
+  TrapIdentity identity{};
+  if (this->identity_pref_.load(&identity) && identity.version == 1 &&
+      memchr(identity.serial, 0, sizeof(identity.serial)) != nullptr &&
+      memchr(identity.firmware, 0, sizeof(identity.firmware)) != nullptr) {
+    this->serial_ = identity.serial;
+    this->firmware_ = identity.firmware;
+  }
+}
+
+void GoodnatureTrap::save_identity_() {
+  TrapIdentity identity{};
+  identity.version = 1;
+  snprintf(identity.serial, sizeof(identity.serial), "%s", this->serial_.c_str());
+  snprintf(identity.firmware, sizeof(identity.firmware), "%s", this->firmware_.c_str());
+  if (!this->identity_pref_.save(&identity))
+    ESP_LOGW(TAG, "Slot %u: failed to save identity", this->index_ + 1);
 }
 
 // Last polled readings, so Battery, Armed and Charging are not blank from a
@@ -278,6 +336,7 @@ void GoodnatureTrap::bind(uint64_t address, esp_ble_addr_type_t addr_type, Model
   this->prefs_.last_seen = now;
   format_address(address, this->address_str_);
   this->reset_runtime_state_();
+  this->save_identity_();
 
   this->save_prefs_(true);
   this->save_cache_();
@@ -307,6 +366,7 @@ void GoodnatureTrap::unbind() {
   this->prefs_ = TrapPrefs{};
   this->address_str_[0] = '\0';
   this->reset_runtime_state_();
+  this->save_identity_();
   this->cache_ = TrapCache{};
   this->save_cache_();
   this->save_prefs_(true);
@@ -345,6 +405,7 @@ void GoodnatureTrap::unbind() {
     this->last_adv_ts_->publish_state("");
   if (this->last_frame_ts_ != nullptr)
     this->last_frame_ts_->publish_state("");
+  publish_text(this->battery_status_ts_, this->battery_status_pub_, "");
   this->publish_identity_();
   this->set_status_(this->status_);
 }
@@ -369,6 +430,22 @@ void GoodnatureTrap::on_advertisement(const esp32_ble_tracker::ESPBTDevice &devi
     this->save_prefs_();
     this->publish_identity_();
     this->hub_->schedule_restart_if_needed();
+  }
+
+  if (detected_model == Model::A24 && this->serial_.empty()) {
+    // This A24 profile broadcasts the first four serial bytes as its first
+    // two 16-bit service UUIDs, followed by 0x1234 at index 3.
+    const auto &uuids = device.get_service_uuids();
+    if (uuids.size() >= 4 && uuids[0].type() == esp32_ble::ESPBTUUID::Type::UUID16 &&
+        uuids[1].type() == esp32_ble::ESPBTUUID::Type::UUID16 &&
+        uuids[3] == esp32_ble::ESPBTUUID::from_uint16(SVC16_LEGACY_1234)) {
+      uint16_t first = uuids[0].uuid16(), second = uuids[1].uuid16();
+      uint8_t bytes[4] = {static_cast<uint8_t>(first), static_cast<uint8_t>(first >> 8),
+                          static_cast<uint8_t>(second), static_cast<uint8_t>(second >> 8)};
+      this->serial_ = decode_a24_serial(bytes, sizeof(bytes));
+      this->save_identity_();
+      this->publish_identity_();
+    }
   }
 
   if (c20_adv != nullptr) {
@@ -527,10 +604,21 @@ void GoodnatureTrap::request_job(Job job) {
 void GoodnatureTrap::apply_a24_characteristic(uint16_t short_id, const uint8_t *data, size_t len) {
   switch (short_id) {
     case CHR_SERIAL:
-      this->serial_ = decode_text(data, len);
+      if (auto serial = decode_a24_serial(data, len); !serial.empty() && serial != this->serial_) {
+        this->serial_ = serial;
+        this->save_identity_();
+      }
+      if (this->model() == Model::UNKNOWN && !this->serial_.empty()) {
+        this->prefs_.model = static_cast<uint8_t>(Model::A24);
+        this->save_prefs_(true);
+        this->hub_->schedule_restart_if_needed();
+      }
       break;
     case CHR_FIRMWARE:
-      this->firmware_ = decode_text(data, len);
+      if (auto firmware = decode_a24_firmware(data, len); !firmware.empty() && firmware != this->firmware_) {
+        this->firmware_ = firmware;
+        this->save_identity_();
+      }
       break;
     case CHR_KILL_DISPLAYED: {
       auto v = parse_u16_le(data, len);
@@ -560,6 +648,8 @@ void GoodnatureTrap::apply_a24_characteristic(uint16_t short_id, const uint8_t *
       auto v = parse_u16_le(data, len);
       if (v.has_value())
         this->apply_a24_battery_raw_(*v);
+      else if (auto byte = parse_u8(data, len); byte.has_value())
+        this->apply_a24_battery_raw_(*byte);
       break;
     }
     case CHR_DEVICE_STATE:
@@ -851,10 +941,21 @@ void GoodnatureTrap::mark_co2_replaced() {
   }
   ESP_LOGI(TAG, "[%s] CO2 canister replaced", this->address_str_);
   this->prefs_.co2_replaced = this->hub_->now_epoch();
+  this->cache_.co2_extra_shots = 0;
   this->prefs_.strikes_at_co2 = this->have_device_counter_ || this->prefs_.strikes_at_co2 != COUNTER_UNKNOWN
                                     ? this->prefs_.strikes
                                     : COUNTER_UNKNOWN;
   this->save_prefs_(true);
+  this->save_cache_();
+  this->publish_consumables_();
+}
+
+void GoodnatureTrap::mark_co2_shot_used() {
+  if (!this->is_bound() || this->model() == Model::C20 || this->cache_.co2_extra_shots == 0xFF ||
+      this->cache_.co2_extra_shots >= this->hub_->co2_capacity())
+    return;
+  this->cache_.co2_extra_shots++;
+  this->save_cache_();
   this->publish_consumables_();
 }
 
@@ -980,9 +1081,9 @@ void GoodnatureTrap::publish_consumables_() {
       this->co2_pub_.reset();
     }
   } else if (this->prefs_.strikes_at_co2 != COUNTER_UNKNOWN) {
-    uint32_t used = this->prefs_.strikes >= this->prefs_.strikes_at_co2
-                        ? this->prefs_.strikes - this->prefs_.strikes_at_co2
-                        : 0;
+    uint32_t used = (this->prefs_.strikes >= this->prefs_.strikes_at_co2
+                         ? this->prefs_.strikes - this->prefs_.strikes_at_co2
+                         : 0) + this->cache_.co2_extra_shots;
     uint16_t capacity = this->hub_->co2_capacity();
     float remaining = used >= capacity ? 0.0f : static_cast<float>(capacity - used);
     publish_float(this->co2_remaining_sensor_, this->co2_pub_, remaining);
@@ -1008,6 +1109,14 @@ void GoodnatureTrap::publish_online_() {
     online = this->last_seen_ms_ != 0 && (millis() - this->last_seen_ms_) < timeout_ms;
   }
   publish_if_changed(this->online_bs_, this->online_pub_, online);
+  if (this->model() == Model::A24) {
+    static constexpr uint32_t RECENT_CONTACT_SECONDS = 24 * 60 * 60;
+    bool recent_contact = now_epoch != 0 && this->last_seen_epoch_ != 0 && now_epoch >= this->last_seen_epoch_ &&
+                          now_epoch - this->last_seen_epoch_ < RECENT_CONTACT_SECONDS;
+    if (now_epoch == 0 && this->last_seen_ms_ != 0)
+      recent_contact = millis() - this->last_seen_ms_ < RECENT_CONTACT_SECONDS * 1000UL;
+    publish_text(this->battery_status_ts_, this->battery_status_pub_, recent_contact ? "Normal" : "Unknown");
+  }
 }
 
 // ---------------------------------------------------------------------------

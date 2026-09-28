@@ -87,6 +87,8 @@ static constexpr uint8_t CACHE_ACTIVE_KNOWN = 0x01;
 static constexpr uint8_t CACHE_ACTIVE = 0x02;
 static constexpr uint8_t CACHE_CHARGING_KNOWN = 0x04;
 static constexpr uint8_t CACHE_CHARGING = 0x08;
+static constexpr uint8_t CACHE_KILL_ALERT_KNOWN = 0x10;
+static constexpr uint8_t CACHE_KILL_ALERT = 0x20;
 
 // Earliest start accepted for a Mouse Trap log window. A start of 0 made the
 // trap stream its events but never send the terminator, so full replays

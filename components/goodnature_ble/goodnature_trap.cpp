@@ -241,6 +241,8 @@ void GoodnatureTrap::save_cache_() {
     flags |= CACHE_ACTIVE_KNOWN | (*this->active_ ? CACHE_ACTIVE : 0);
   if (this->charging_.has_value())
     flags |= CACHE_CHARGING_KNOWN | (*this->charging_ ? CACHE_CHARGING : 0);
+  if (this->kill_alert_.has_value())
+    flags |= CACHE_KILL_ALERT_KNOWN | (*this->kill_alert_ ? CACHE_KILL_ALERT : 0);
   this->cache_.flags = flags;
   if (!this->cache_pref_.save(&this->cache_))
     ESP_LOGW(TAG, "Slot %u: failed to save cached readings", this->index_ + 1);
@@ -274,6 +276,8 @@ void GoodnatureTrap::restore_from_cache_() {
     this->active_ = (this->cache_.flags & CACHE_ACTIVE) != 0;
   if (this->cache_.flags & CACHE_CHARGING_KNOWN)
     this->charging_ = (this->cache_.flags & CACHE_CHARGING) != 0;
+  if (this->cache_.flags & CACHE_KILL_ALERT_KNOWN)
+    this->kill_alert_ = (this->cache_.flags & CACHE_KILL_ALERT) != 0;
 }
 
 void GoodnatureTrap::save_prefs_(bool flush) {

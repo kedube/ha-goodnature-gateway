@@ -115,7 +115,8 @@ Each slot in use is a sub-device. A free slot carries the full entity set; once 
 
 Lure and CO2 timers start when a trap is discovered, on the assumption it was just serviced. Press the "Replaced" buttons if not.
 
-![Home Assistant device page for Goodnature Trap 2, a Mouse Trap, showing battery, kill alert, strikes, lure sensors, the Strike event and the configuration buttons](images/screenshot-3.png)
+![Home Assistant device page for Goodnature A24 Smart Trap](images/screenshot-3.png)
+![Home Assistant device page for Goodnature Mouse Trap](images/screenshot-4.png)
 
 #### Both models
 

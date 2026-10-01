@@ -35,7 +35,7 @@ esphome:
   # Bump it here and tag the commit (v1.0) when cutting a release.
   project:
     name: kedube.goodnature-gateway
-    version: "1.1"
+    version: "1.2"
   # ESPHome flashes with its own esptool step and reads upload_speed from
   # here. The serial port is not a build option (the native ESP-IDF build
   # ignores upload_port), so `make flash` passes upload_port from
@@ -115,7 +115,6 @@ goodnature_ble:
   lure_life_days: ${lure_life_days}
   co2_capacity: ${co2_capacity}
   co2_low_threshold: ${co2_low_threshold}
-  offline_timeout_a24: ${offline_timeout_a24}
   offline_timeout_c20: ${offline_timeout_c20}
   discovery: ${discovery}
   auto_acknowledge: ${auto_acknowledge}

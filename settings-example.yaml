@@ -6,7 +6,7 @@ substitutions:
   device_name: "goodnature-gateway"      # hostname / ESPHome node name
   friendly_name: "Goodnature Gateway"    # shown in Home Assistant
   device_description: "BLE gateway for Goodnature traps"
-  device_area: "Attic""
+  device_area: "Attic"
 
   # Hardware ------------------------------------------------------------
   # Pick one of the blocks below. board/variant/flash_size/partitions must
@@ -52,7 +52,10 @@ substitutions:
   # they are discovered, and the gateway restarts itself when a new slot
   # comes into use so Home Assistant gains the device, no reflash needed.
   max_traps: "8"
-  slot_name_prefix: "Goodnature Trap"    # devices are "<prefix> 1", "<prefix> 2", ...
+  # Devices are named after their trap: "Goodnature A24 Smart Trap 1",
+  # "Goodnature Mouse Trap 1", ... A slot whose model is not known yet (the
+  # empty slot on a fresh gateway) is "<prefix> <slot>".
+  slot_name_prefix: "Goodnature Trap"
 
   # Polling --------------------------------------------------------------
   # Minimum time between GATT polls of the same trap. A24 traps sleep, so
@@ -85,8 +88,9 @@ substitutions:
   a24_hint_firmware: ""
 
   # Presence ---------------------------------------------------------------
-  offline_timeout_a24: "24h"             # A24s sleep between events
-  offline_timeout_c20: "15min"           # C20s advertise constantly
+  # A24s check in when switched on and after a kill, and sleep in between,
+  # so they stay Online once heard. Mouse Traps advertise constantly.
+  offline_timeout_c20: "15min"
 
   # Discovery ------------------------------------------------------------
   discovery: "true"                      # initial state of the Trap Discovery switch

@@ -104,6 +104,14 @@ void GoodnatureTrap::init_prefs() {
   this->identity_pref_ = global_preferences->make_preference<TrapIdentity>(identity_key, true);
 }
 
+void GoodnatureTrap::name_device(uint8_t number) {
+  if (this->device_ == nullptr)
+    return;
+  snprintf(this->device_name_, sizeof(this->device_name_), "Goodnature %s %u", model_name(this->model()),
+           (unsigned) number);
+  this->device_->set_name(this->device_name_);
+}
+
 void GoodnatureTrap::register_with_app() {
   Model model = this->is_bound() ? this->model() : Model::UNKNOWN;
   this->registered_model_ = model;
@@ -1103,7 +1111,17 @@ void GoodnatureTrap::publish_last_seen_() {
 void GoodnatureTrap::publish_online_() {
   if (!this->is_bound())
     return;
-  uint32_t timeout_ms = this->hub_->offline_timeout_ms(this->model());
+  if (this->model() != Model::C20) {
+    // An A24 advertises when it is switched on and after a kill, and sleeps
+    // in between for as long as that takes, so silence says nothing about it.
+    // A slot is only bound from one of the trap's own advertisements: a bound
+    // A24 has checked in, and stays online until it is forgotten.
+    publish_if_changed(this->online_bs_, this->online_pub_, true);
+    if (this->model() == Model::A24)
+      publish_text(this->battery_status_ts_, this->battery_status_pub_, "Normal");
+    return;
+  }
+  uint32_t timeout_ms = this->hub_->offline_timeout_c20_ms();
   uint32_t now_epoch = this->hub_->now_epoch();
   bool online;
   if (now_epoch != 0 && this->last_seen_epoch_ != 0) {
@@ -1113,14 +1131,6 @@ void GoodnatureTrap::publish_online_() {
     online = this->last_seen_ms_ != 0 && (millis() - this->last_seen_ms_) < timeout_ms;
   }
   publish_if_changed(this->online_bs_, this->online_pub_, online);
-  if (this->model() == Model::A24) {
-    static constexpr uint32_t RECENT_CONTACT_SECONDS = 24 * 60 * 60;
-    bool recent_contact = now_epoch != 0 && this->last_seen_epoch_ != 0 && now_epoch >= this->last_seen_epoch_ &&
-                          now_epoch - this->last_seen_epoch_ < RECENT_CONTACT_SECONDS;
-    if (now_epoch == 0 && this->last_seen_ms_ != 0)
-      recent_contact = millis() - this->last_seen_ms_ < RECENT_CONTACT_SECONDS * 1000UL;
-    publish_text(this->battery_status_ts_, this->battery_status_pub_, recent_contact ? "Normal" : "Unknown");
-  }
 }
 
 // ---------------------------------------------------------------------------

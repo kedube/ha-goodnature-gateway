@@ -3,9 +3,10 @@ ESPHome external component: Goodnature trap BLE gateway.
 
 One `goodnature_ble:` block creates the hub, a shared GATT connection and
 `max_traps` trap slots. Each slot can become a Home Assistant sub-device
-("Goodnature Trap 1", "Goodnature Trap 2", ...) with a fixed set of
-entities. `max_traps` is the compile-time ceiling; only the slots that hold
-a trap (at least one) are registered with Home Assistant, decided at boot
+named after the trap it holds ("Goodnature A24 Smart Trap 1", "Goodnature
+Mouse Trap 1", ...) with a fixed set of entities. `max_traps` is the
+compile-time ceiling; only the slots that hold a trap (at least one) are
+registered with Home Assistant, decided at boot
 from the bindings in flash. Traps are discovered automatically from their
 BLE advertisements and bound to the first free slot; the gateway restarts
 when that slot was not registered yet so Home Assistant gains its device.
@@ -19,6 +20,8 @@ when that slot was not registered yet so Home Assistant gains its device.
 """
 
 from __future__ import annotations
+
+import logging
 
 import esphome.codegen as cg
 from esphome.components import (
@@ -68,6 +71,8 @@ from esphome.const import (
 from esphome.core import CORE, CoroPriority, coroutine_with_priority
 from esphome.core.config import Device
 from esphome.helpers import fnv1a_32bit_hash
+
+_LOGGER = logging.getLogger(__name__)
 
 CODEOWNERS = ["@kedube"]
 DEPENDENCIES = ["esp32_ble_tracker"]
@@ -120,6 +125,19 @@ CONF_A24_HINT_FIRMWARE = "a24_hint_firmware"
 UNIT_DAYS = "d"
 UNIT_SHOTS = "shots"
 
+
+def _ignore_offline_timeout_a24(config):
+    # Accepted so existing configs still compile, but no longer used.
+    if CONF_OFFLINE_TIMEOUT_A24 in config:
+        _LOGGER.warning(
+            "goodnature_ble: '%s' is no longer used and can be removed. An A24 "
+            "advertises only when switched on and after a kill, so it stays "
+            "Online once it has checked in.",
+            CONF_OFFLINE_TIMEOUT_A24,
+        )
+    return config
+
+
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
@@ -140,9 +158,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_CO2_LOW_THRESHOLD, default=4): cv.int_range(
                 min=0, max=1000
             ),
-            cv.Optional(
-                CONF_OFFLINE_TIMEOUT_A24, default="24h"
-            ): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_OFFLINE_TIMEOUT_A24): cv.positive_time_period_milliseconds,
             cv.Optional(
                 CONF_OFFLINE_TIMEOUT_C20, default="15min"
             ): cv.positive_time_period_milliseconds,
@@ -167,6 +183,7 @@ CONFIG_SCHEMA = cv.All(
     .extend(cv.COMPONENT_SCHEMA)
     .extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA),
     esp32_ble.consume_connection_slots(1, "goodnature_ble"),
+    _ignore_offline_timeout_a24,
 )
 
 
@@ -672,7 +689,6 @@ async def to_code(config):
     cg.add(hub.set_lure_life_days(config[CONF_LURE_LIFE_DAYS]))
     cg.add(hub.set_co2_capacity(config[CONF_CO2_CAPACITY]))
     cg.add(hub.set_co2_low_threshold(config[CONF_CO2_LOW_THRESHOLD]))
-    cg.add(hub.set_offline_timeout_a24(config[CONF_OFFLINE_TIMEOUT_A24]))
     cg.add(hub.set_offline_timeout_c20(config[CONF_OFFLINE_TIMEOUT_C20]))
     cg.add(hub.set_write_time_on_connect(config[CONF_WRITE_TIME_ON_CONNECT]))
     cg.add(hub.set_discovery_default(config[CONF_DISCOVERY]))

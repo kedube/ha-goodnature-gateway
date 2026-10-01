@@ -68,9 +68,9 @@ The project ships its own partition tables because the firmware is large: `parti
 
 ### 4. Add to Home Assistant
 
-Accept the discovered gateway under **Settings → Devices & Services** and enter the API encryption key from `secrets.yaml`. You get one gateway device plus one device per slot in use, named **Goodnature Trap 1 … N**. A fresh gateway shows a single empty slot; each newly discovered trap takes the next slot, and the gateway restarts a few seconds later so Home Assistant gains the device.
+Accept the discovered gateway under **Settings → Devices & Services** and enter the API encryption key from `secrets.yaml`. You get one gateway device plus one device per slot in use, named after the trap it holds and numbered per model: **Goodnature A24 Smart Trap 1, 2, …** and **Goodnature Mouse Trap 1, 2, …**. A fresh gateway shows a single empty slot, **Goodnature Trap 1**; each newly discovered trap takes the next slot, and the gateway restarts a few seconds later so Home Assistant gains the device under its model name.
 
-![Home Assistant ESPHome integration page listing the Goodnature Gateway device with two Goodnature Trap sub-devices](images/screenshot-1.png)
+![Home Assistant ESPHome integration page listing the Goodnature Gateway device with Goodnature A24 Smart Trap 1 and Goodnature Mouse Trap 1 sub-devices](images/screenshot-1.png)
 
 ### 5. Deploy
 
@@ -89,13 +89,12 @@ Every option is a substitution in `settings.yaml`, passed through to the `goodna
 | Option | Default | Effect |
 |---|---|---|
 | `max_traps` | `8` | Number of slots compiled in (~28 entities each). Only slots holding a trap are shown in Home Assistant. |
-| `slot_name_prefix` | `Goodnature Trap` | Device names are `<prefix> <n>`. |
+| `slot_name_prefix` | `Goodnature Trap` | Name for a slot whose model is not known yet, as `<prefix> <slot>`. Traps are named after their model. |
 | `poll_interval` | `15min` | Minimum time between GATT polls of a trap. `0s` disables scheduled polling. |
 | `lure_life_days` | `180` | Default lure life; each trap has a **Lure Life** number to override it. |
 | `co2_capacity` | `24` | Shots per CO2 canister (A24). |
 | `co2_low_threshold` | `4` | **CO2 Low** turns on at or below this many shots. |
-| `offline_timeout_a24` | `24h` | **Online** turns off when an A24 has not been heard for this long. |
-| `offline_timeout_c20` | `15min` | Same for the Mouse Trap. |
+| `offline_timeout_c20` | `15min` | **Online** turns off when a Mouse Trap has not been heard for this long. A24s have no timeout; see **Online**. |
 | `write_time_on_connect` | `true` | Send the current time to the trap on each connection, as the app does. |
 | `discovery` | `true` | Initial state of the **Trap Discovery** switch. |
 | `auto_acknowledge` | `false` | Queue **Clear Kill Alert** automatically after a poll finds the alert raised. Home Assistant still sees the alert and **Strike** event first. |
@@ -130,7 +129,7 @@ Lure and CO2 timers start when a trap is discovered, on the assumption it was ju
 | **Battery Low** | binary, battery | A24: registered only with battery calibration, then on at or below `a24_battery_low_percent`. Mouse Trap: LOW, CRITICAL or NOT_CONNECTED from advertisement and poll. |
 | **Lure Age**, **Lure Remaining** | sensor, days | From **Lure Replaced** and **Lure Life**. |
 | **Lure Due** | binary, problem | On when Lure Remaining ≤ 0. |
-| **Online** | binary, connectivity | Heard within the model's offline timeout. |
+| **Online** | binary, connectivity | A24: on once the trap has checked in, until it is forgotten. An A24 advertises when switched on and after a kill, and sleeps in between, so not hearing it is normal. Mouse Trap: heard within `offline_timeout_c20`. |
 | **Signal Strength**, **Last Seen** | sensor, diagnostic | Republished at most every 30 s. |
 | **Model**, **Serial Number**, **Firmware**, **MAC Address**, **Status** | text, diagnostic | Status: `Unassigned`, `Discovered`, `Waiting for trap`, `Connecting`, `OK`, `Test fire sent`, `Alert cleared`, `Failed: …`. |
 | **Last Advertisement**, **Last Frame** | text, diagnostic, disabled | Raw hex captures, filled only while **Debug Mode** is on. |
@@ -147,7 +146,7 @@ Lure and CO2 timers start when a trap is discovered, on the assumption it was ju
 | Entity | Type | Notes |
 |---|---|---|
 | **Battery Voltage Raw** | sensor, diagnostic, disabled | Raw `FAD1` value; units unknown. Firmware 1.3.0 returned a single byte. Read it on a fresh and a flat battery to fill in the calibration options. |
-| **Battery Status** | text, diagnostic | Activity proxy: `Normal` if the gateway heard the A24 within 24 hours; `Unknown` otherwise. It does not measure remaining charge or observe app-only syncs. |
+| **Battery Status** | text, diagnostic | Activity proxy: `Normal` once the A24 has checked in, on the same basis as **Online**. It does not measure remaining charge or observe app-only syncs. |
 | **CO2 Shots Remaining** | sensor | `co2_capacity` minus strikes since **CO2 Canister Replaced**. |
 | **CO2 Low** | binary, problem | On at or below `co2_low_threshold`. |
 | **CO2 Canister Replaced** | button | Re-anchors the shot counter. |
@@ -184,7 +183,7 @@ make states                      # every entity, grouped by device
 make capture                     # Debug Mode on for 60 s: decoded advertisements, GATT tables, UART frames
 make capture SECONDS=180 POLL=1  # longer, and press Poll Now on every slot first
 tools/gateway_inspect.py decode "UART 10/01:e46cb26a01000104000000000000"   # decode a pasted value offline
-tools/gateway_inspect.py press "Test Fire" --device "Goodnature Trap 1"      # any button, by name
+tools/gateway_inspect.py press "Test Fire" --device "Goodnature Mouse Trap 1" # any button, by name
 ```
 
 `capture` prints each raw advertisement and frame with a decoded `->` line, using the same layouts as `protocol.cpp`. Bytes not understood yet (5 and 8 of the Mouse Trap advertisement) are shown raw, and the gateway logs `advertisement bytes changed` whenever they move. Keep the decoders in the tool and in `protocol.cpp` in step.

@@ -47,7 +47,6 @@ class GoodnatureHub : public Component, public esp32_ble_tracker::ESPBTDeviceLis
   void set_lure_life_days(uint16_t days) { this->lure_life_days_ = days; }
   void set_co2_capacity(uint16_t shots) { this->co2_capacity_ = shots; }
   void set_co2_low_threshold(uint16_t shots) { this->co2_low_threshold_ = shots; }
-  void set_offline_timeout_a24(uint32_t ms) { this->offline_timeout_a24_ms_ = ms; }
   void set_offline_timeout_c20(uint32_t ms) { this->offline_timeout_c20_ms_ = ms; }
   void set_write_time_on_connect(bool v) { this->write_time_on_connect_ = v; }
   void set_discovery_default(bool v) { this->discovery_enabled_ = v; }
@@ -76,9 +75,8 @@ class GoodnatureHub : public Component, public esp32_ble_tracker::ESPBTDeviceLis
   uint16_t default_lure_life_days() const { return this->lure_life_days_; }
   uint16_t co2_capacity() const { return this->co2_capacity_; }
   uint16_t co2_low_threshold() const { return this->co2_low_threshold_; }
-  uint32_t offline_timeout_ms(protocol::Model model) const {
-    return model == protocol::Model::C20 ? this->offline_timeout_c20_ms_ : this->offline_timeout_a24_ms_;
-  }
+  // Only the Mouse Trap times out; an A24 stays online once it has checked in.
+  uint32_t offline_timeout_c20_ms() const { return this->offline_timeout_c20_ms_; }
   bool write_time_on_connect() const { return this->write_time_on_connect_; }
   bool auto_acknowledge() const { return this->auto_acknowledge_; }
   uint16_t a24_battery_empty_raw() const { return this->a24_battery_empty_raw_; }
@@ -148,7 +146,6 @@ class GoodnatureHub : public Component, public esp32_ble_tracker::ESPBTDeviceLis
   uint16_t lure_life_days_{180};
   uint16_t co2_capacity_{24};
   uint16_t co2_low_threshold_{4};
-  uint32_t offline_timeout_a24_ms_{24UL * 60 * 60 * 1000};
   uint32_t offline_timeout_c20_ms_{15UL * 60 * 1000};
   bool write_time_on_connect_{true};
   bool discovery_enabled_{true};

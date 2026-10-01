@@ -89,7 +89,7 @@ The table gives characteristic value handles in hex. `N` denotes the advertised 
 
 ### Battery and contact state
 
-No charge percentage or low-battery threshold has been established for the observed `FAD1`/`FAD2` values. Without user-supplied raw calibration, the gateway leaves A24 **Battery %** and **Battery Low** unavailable. Its **Battery Status** text uses contact as a proxy: `Normal` if the gateway received an advertisement within the past 24 hours, `Unknown` otherwise. It does not measure charge or observe a sync performed only by the Goodnature app. **Last Seen** records the gateway's latest advertisement; a successful GATT poll is a separate event.
+No charge percentage or low-battery threshold has been established for the observed `FAD1`/`FAD2` values. Without user-supplied raw calibration, the gateway leaves A24 **Battery %** and **Battery Low** unavailable. Its **Battery Status** text uses contact as a proxy: `Normal` once the gateway has received an advertisement from the trap. The A24 advertises when switched on and after a kill and is otherwise silent, so the gateway treats it as present, and **Online**, from its first check-in until it is forgotten. It does not measure charge or observe a sync performed only by the Goodnature app. **Last Seen** records the gateway's latest advertisement; a successful GATT poll is a separate event.
 
 No A24 characteristic in this capture reported CO₂ shots remaining. The gateway calculates that Home Assistant value from its configured canister capacity, a stored baseline for `D20D`, and any manual **CO₂ Shot Used** adjustments. The baseline is established when the counter first becomes known or when the user marks a new canister.
 

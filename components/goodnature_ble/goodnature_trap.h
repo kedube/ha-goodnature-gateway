@@ -111,6 +111,8 @@ class GoodnatureTrap {
   // hub decides are active (the gateway's "Slots" number).
   void set_device(Device *device) { this->device_ = device; }
   Device *device() const { return this->device_; }
+  // Renames the device after the bound model, e.g. "Goodnature Mouse Trap 2".
+  void name_device(uint8_t number);
   void add_button(button::Button *b, TrapButtonKind kind) { this->buttons_.push_back({b, kind}); }
   bool is_active() const { return this->slot_active_; }
   // True when this slot's entities were registered for a different model
@@ -256,6 +258,7 @@ class GoodnatureTrap {
   bool slot_active_{true};  // registered with Home Assistant (not the trap's armed state)
   char address_str_[18]{};
   Device *device_{nullptr};
+  char device_name_[40]{};  // Device keeps only the pointer
   struct SlotButton {
     button::Button *button;
     TrapButtonKind kind;

@@ -49,6 +49,20 @@ void GoodnatureHub::setup() {
   // holding a trap, and at least one so the gateway shows what it expects.
   for (auto *trap : this->traps_)
     trap->init_prefs();
+  // Name each slot's device after the model it holds, numbered per model in
+  // slot order: "Goodnature A24 Smart Trap 1", "Goodnature Mouse Trap 1", ...
+  // A slot without a known model keeps "<slot_name_prefix> <n>". Names are
+  // fixed at boot like the entity set; a name given in Home Assistant wins.
+  uint8_t a24_count = 0, c20_count = 0;
+  for (auto *trap : this->traps_) {
+    if (!trap->is_bound())
+      continue;
+    if (trap->model() == Model::A24) {
+      trap->name_device(++a24_count);
+    } else if (trap->model() == Model::C20) {
+      trap->name_device(++c20_count);
+    }
+  }
   uint8_t wanted = this->wanted_slots_();
   this->active_slots_ = wanted;
   for (auto *trap : this->traps_) {

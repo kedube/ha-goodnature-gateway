@@ -314,7 +314,7 @@ def main() -> None:
     d = sub.add_parser("decode", help="decode captured values offline, e.g. 'UART 10/01:e46c...' or an ADV log line")
     d.add_argument("values", nargs="+")
     d.set_defaults(fn=None)
-    b = sub.add_parser("press", help="press a button, e.g. press 'Poll Now' --device 'Goodnature Trap 1'")
+    b = sub.add_parser("press", help="press a button, e.g. press 'Poll Now' --device 'Goodnature Mouse Trap 1'")
     b.add_argument("button")
     b.add_argument("--device")
     b.set_defaults(fn=cmd_press)

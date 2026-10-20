@@ -53,6 +53,9 @@ def default_key() -> str | None:
 def fmt_state(entity, state) -> str:
     if getattr(state, "missing_state", False):
         return "unknown"
+    # Date entities carry year/month/day instead of a single state field.
+    if hasattr(state, "year"):
+        return f"{state.year:04d}-{state.month:02d}-{state.day:02d}"
     v = getattr(state, "state", None)
     if isinstance(v, float):
         if v != v:  # NaN

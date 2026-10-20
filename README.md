@@ -122,25 +122,26 @@ Lure and CO2 timers start when a trap is discovered, on the assumption it was ju
 | Entity | Type | Notes |
 |---|---|---|
 | **Strikes** | sensor, total increasing | A24: the `D20D` counter (test fires included, as they use CO₂); until first read, inferred from advertisement bursts on firmware without the newer advertisement. Mouse Trap: the trap's kill history (its last ten kill times), as the app counts it; each poll adds kills newer than the last one counted. The lifetime total comes from replaying the striker log when a trap is first found and on **Poll Now**; only sensor-triggered fires count, not test fires or the motor's self-tests. |
-| **Kill Alert** | binary, occupancy | A24: kept by the gateway. On when **Strikes** goes up, when the trap has kills nobody acknowledged, or when its advertisement shows unread kills; off only when you press **Clear Kill Alert**, and kept across restarts. Mouse Trap: the trap's kill state from the poll, or the advertisement's "strikes available" bit when it changes, whichever is newer. |
-| **Strike** | event | `strike` when the count goes up, `test_fire` on a test fire. Use this for automations. |
-| **Last Strike** | sensor, timestamp | A24: the newest kill record's time. Mouse Trap: the trap's own timestamp on its last kill. Test fires do not move it. |
+| **Kill Alert** | binary, occupancy | A24: kept by the gateway. On when **Strikes** goes up, when the trap has kills nobody acknowledged, or when its advertisement shows unread kills; off only when you press **Clear Kill Alert**, and kept across restarts. Starts off at the first session that finds nothing pending (unknown until then). Mouse Trap: the trap's kill state from the poll, or the advertisement's "strikes available" bit when it changes, whichever is newer. |
+| **Strike** | event | `strike` when the count goes up, `test_fire` on a Mouse Trap test fire (an A24 fired by hand is a `strike`). Use this for automations. |
+| **Last Strike** | text, timestamp | A24: the newest kill record's time, to the minute. Mouse Trap: the trap's own timestamp on its last kill. Test fires do not move it. |
 | **Battery** | sensor, % | A24: registered only with the `a24_battery_*_raw` calibration. Mouse Trap: from each poll; kept across restarts. |
 | **Battery Low** | binary, battery | The trap's own low-battery flag in its advertisement. Mouse Trap: also at 20 % or below, the app's low-battery threshold. A24: also at or below `a24_battery_low_percent` with the calibration. |
 | **Battery Status** | text, diagnostic | The app's label. A24: `Full`, `Medium`, `Low` or `Critical` from the battery's internal resistance (the one capture read `Critical` from a working battery, so treat it as a trend). Mouse Trap: `Charging`, `Charged` (plugged in, done), or by level `Full` (85 %+), `Good` (45 %+), `Ok` (15 %+), `Low` (5 %+), `Empty`. |
-| **Trap Error** | binary, problem | Mouse Trap: the device state is ERROR; the app's advice is to restart the trap by holding its button until it flashes white. A24: the advertisement's new-error flag. |
+| **Trap Error** | binary, problem | Mouse Trap: the device state is ERROR; the app's advice is to restart the trap by holding its button until it flashes white. A24: on when the trap logs an error record other than the one it logs whenever it hangs up on the end of a session, and kept, across restarts, until **Clear Trap Error**. |
 | **Lure Age**, **Lure Remaining** | sensor, days | From the lure replacement date and **Lure Life**. |
 | **Lure Due** | binary, problem | On when Lure Remaining ≤ 0. |
 | **Online** | binary, connectivity | A24: on once the trap has checked in, until it is forgotten. An A24 advertises when switched on, after a kill and when shaken, and sleeps in between, so not hearing it is normal. Mouse Trap: heard within `offline_timeout_c20`. |
-| **Signal Strength**, **Last Seen** | sensor, diagnostic | Republished at most every 30 s. |
+| **Signal Strength**, **Last Seen** | sensor and text timestamp, diagnostic | Republished at most every 30 s. |
 | **Model**, **Serial Number**, **Firmware**, **MAC Address**, **Status** | text, diagnostic | Status: `Unassigned`, `Discovered`, `Waiting for trap`, `Connecting`, `OK`, `Test fire sent`, `Test fire blocked: …`, `Alert cleared`, `Test fire sent; poll failed: …`, `Clear sent; poll failed: …` (the command reached the trap but the poll after it did not finish), `Failed: …`. |
 | **Last Advertisement**, **Last Frame** | text, diagnostic, disabled | Raw hex captures, filled only while **Debug Mode** is on. |
 | **Lure Life** | number, days | Per-trap override of the default lure life (180 days A24 paste, 90 Mouse Trap donut). |
 | **Lure Replaced On** | date, config | The lure replacement date. Set a past date if you replaced it earlier; today means now. Future dates are refused. |
 | **Poll Now** | button | Connect and read everything. On a Mouse Trap also replays the whole striker log (about 12 s) to resync **Strikes** with the trap's lifetime total. |
 | **Lure Replaced** | button | Restarts the lure timer now. |
+| **Clear Trap Error** | button | A24 only: turns **Trap Error** off. |
 | **Clear Kill Alert** | button | A24: turns **Kill Alert** off at once, without the trap: the gateway already acknowledges kills on the trap in every session, like the app. Mouse Trap: `SetCommand(CLEAR)` (the app's "Empty trap"), sent even when the trap refuses UART notifications, and not resent once the trap acknowledges it. |
-| **Test Fire** | button | **Fires the trap.** A24: control `0x05`. Mouse Trap: `SetCommand(FIRE)`, refused (Status `Test fire blocked: …`) while the trap is on the charger, has a kill waiting, has its tray open, is in error, or before its first poll, as in the app. Once the trap acknowledges the write it is not resent, even if the poll after it fails. |
+| **Test Fire** | button | Mouse Trap only. **Fires the trap**: `SetCommand(FIRE)`, refused (Status `Test fire blocked: …`) while the trap is on the charger, has a kill waiting, has its tray open, is in error, or before its first poll, as in the app. Once the trap acknowledges the write it is not resent, even if the poll after it fails. An A24 has no **Test Fire**: its Smart Cap only counts strikes, so test fire it by hand with a stick on the trigger, as the app says. |
 | **Forget Trap** | button | Unbind the slot so it can take a new trap. |
 | **Log Debug Info** | button | Dump the slot's internal state to the log at INFO. |
 
@@ -217,6 +218,7 @@ tools/gateway_inspect.py press "Test Fire" --device "Goodnature Mouse Trap 1" # 
 
 | Symptom | Cause |
 |---|---|
+| **Last Seen**, **Last Strike** or an A24's **Test Fire** unavailable after an update | Last Seen and Last Strike are now exact text timestamps, so Home Assistant adds them as new entities (possibly with a `_2` suffix), and an A24 no longer has Test Fire. Delete the unavailable ones, rename the new ones if you like, and point any automations at them. |
 | Nothing discovered | Trap asleep (A24) or out of range. Wake it, check RSSI at `DEBUG`, and make sure **Trap Discovery** is on. |
 | An A24 never syncs | It only wakes when it has a strike to report. To sync anyway, shake the Smart Cap until its red light flashes (the app's own tip); a queued **Poll Now** or **Clear Kill Alert** then runs. |
 | `all N slots are in use` in the log | More traps in range than `max_traps`. Raise it and reflash, or turn discovery off and forget unwanted slots. |
@@ -259,7 +261,7 @@ For a capture to attach to an issue, set `logger.level: DEBUG` and `logs: { good
 - Because the gateway acknowledges every A24 session, as the app does, the Goodnature app no longer sends its own "new strike" notification for A24 kills the gateway saw first; it still downloads them.
 - Mouse Trap strikes come from the trap's kill history, which holds ten kills: more than ten kills between two polls would be undercounted until the next **Poll Now**. Kills are matched by timestamp, so the trap's clock must be right; the gateway sets it on every connection (`write_time_on_connect`). Firmware 0.2.550 and older has no kill history and is still read incrementally from the striker log (events since the last poll, with overlap and deduplication), replayed in full daily. Events stamped before 2017 are ignored.
 - The first boot after updating from gateway 1.3 or earlier forgets the cached readings (Battery, Armed, Charging, Kill Alert) until each trap's next poll: about a minute for a Mouse Trap, the next wake for an A24.
-- The A24 **Trap Error** (the advertisement's new-error flag) has not been seen set on a real trap.
+- An A24 logs an error record (and sets its advertisement's new-error flag) about half the time a session ends, when it hangs up on the closing `02` write (which the app also sends) before the gateway disconnects. **Trap Error** ignores that kind of record; see the error channel in [docs/ble-protocol.md](docs/ble-protocol.md). No other kind has been seen yet.
 - A Mouse Trap cannot be armed or disarmed over Bluetooth: the DEACTIVATE command the app defines is acknowledged and ignored.
 - Mouse Trap advertisement byte 8 is a battery state rather than a percentage, and byte 5 only partly matches the reference integration's layout: `0x02` (kill alert) and `0x10` (charging) agreed with the poll, but activated traps never set `0x01`. Only `0x02` is used; armed and charging state come from the poll. Any change in those bytes triggers an immediate poll (at most once a minute).
 - A trap's kill timestamp can differ from what the app showed; **Last Strike** reports the trap's own value.

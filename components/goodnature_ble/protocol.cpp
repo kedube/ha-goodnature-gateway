@@ -207,6 +207,18 @@ std::optional<A24Strike> parse_d30d(const uint8_t *data, size_t len) {
   return strike;
 }
 
+std::optional<A24ErrorRecord> parse_e772(const uint8_t *data, size_t len) {
+  if (data == nullptr || len < 17)
+    return std::nullopt;
+  A24ErrorRecord rec{};
+  rec.record = *parse_u16_le(data, 2);
+  rec.minutes_since_epoch = *parse_u32_le(data, len, 2);
+  rec.value = *parse_u32_le(data, len, 10);
+  rec.line = *parse_u16_le(data + 14, 2);
+  rec.file = data[16];
+  return rec;
+}
+
 std::optional<A24Advertisement> parse_a24_advertisement(const uint16_t *uuids, size_t count) {
   if (uuids == nullptr || count != 6 || uuids[3] != SVC16_LEGACY_1234)
     return std::nullopt;

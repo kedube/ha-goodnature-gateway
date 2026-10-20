@@ -103,7 +103,8 @@ void GoodnatureConnection::tick(uint32_t now_ms) {
       } else if (op.optional) {
         ESP_LOGD(TAG, "[%s] no answer to optional request %u, continuing", this->address_str(),
                  (unsigned) this->op_index_);
-        this->trap_->on_optional_unanswered(op.expect_type);
+        if (op.kind == OpKind::C20_REQUEST)
+          this->trap_->on_optional_unanswered(op.expect_type);
       } else {
         ESP_LOGW(TAG, "[%s] operation %u (kind %u) timed out", this->address_str(), (unsigned) this->op_index_,
                  (unsigned) op.kind);
@@ -226,9 +227,13 @@ bool GoodnatureConnection::gattc_event_handler(esp_gattc_cb_event_t event, esp_g
         if (op.command && param->write.status == ESP_GATT_OK)
           this->trap_->on_command_delivered(this->job_);
         if (op.kind == OpKind::WRITE || op.kind == OpKind::WRITE_ECHO_U16) {
-          if (param->write.status != ESP_GATT_OK) {
+          if (op.ends_session && param->write.status == ESP_GATT_ERROR) {
+            // 133: the link dropped with the write pending, i.e. the trap hung up on it.
+            ESP_LOGD(TAG, "[%s] trap closed the session on write %04X", this->address_str(), op.gn_uuid);
+          } else if (param->write.status != ESP_GATT_OK) {
             ESP_LOGW(TAG, "[%s] write %04X failed, status %d", this->address_str(), op.gn_uuid, param->write.status);
-            this->ok_so_far_ = false;
+            if (!op.optional)
+              this->ok_so_far_ = false;
           }
           this->op_done_();
         } else if ((op.kind == OpKind::C20_REQUEST || op.kind == OpKind::C20_LOGS) &&
@@ -282,6 +287,9 @@ bool GoodnatureConnection::gattc_event_handler(esp_gattc_cb_event_t event, esp_g
 
     case ESP_GATTC_DISCONNECT_EVT:
     case ESP_GATTC_CLOSE_EVT: {
+      // Hung up on the closing write before its write event arrived.
+      if (this->op_in_flight_ && this->op_index_ < this->ops_.size() && this->ops_[this->op_index_].ends_session)
+        this->disconnect_requested_ = true;
       const char *reason = "disconnected";
       if (this->disconnect_requested_)
         reason = this->ok_so_far_ ? "done" : (this->uart_error_[0] != '\0' ? this->uart_error_ : "partial");
@@ -394,23 +402,6 @@ void GoodnatureConnection::build_ops_() {
     put_u32_le(w.data, now / 60);
     this->ops_.push_back(std::move(w));
   }
-  if (this->job_ == Job::TEST_FIRE) {
-    Op ctl{OpKind::WRITE};
-    ctl.gn_uuid = CHR_CONTROL;
-    ctl.data = {A24_CONTROL_TEST_FIRE};
-    ctl.command = true;
-    this->ops_.push_back(std::move(ctl));
-    Op wait{OpKind::WAIT};
-    wait.wait_ms = 500;
-    this->ops_.push_back(std::move(wait));
-    this->ops_.push_back(Op{OpKind::READ, CHR_KILL_DISPLAYED});
-    // The app selects the returned kill by writing the displayed counter back.
-    Op sel{OpKind::WRITE_ECHO_U16};
-    sel.gn_uuid = CHR_KILL_DISPLAYED;
-    sel.src_uuid = CHR_KILL_DISPLAYED;
-    this->ops_.push_back(std::move(sel));
-    this->ops_.push_back(Op{OpKind::READ, CHR_KILL_PAYLOAD});
-  }
   this->push_a24_poll_ops_();
 }
 
@@ -418,24 +409,33 @@ void GoodnatureConnection::push_a24_poll_ops_() {
   // CHR_KILL_DISPLAYED is also a cursor: writing a record number to it
   // selects what CHR_KILL_PAYLOAD returns. Point it at the newest record,
   // as the app does, rather than wherever the last session left it.
-  auto select_newest = [this]() {
+  // The error channel is assumed to work the same way (the app never uses
+  // it): E771 selects what E772 returns, which reads all zero otherwise.
+  auto select_newest = [this](uint16_t cursor) {
     Op sel{OpKind::WRITE_ECHO_U16};
-    sel.gn_uuid = CHR_KILL_DISPLAYED;
-    sel.src_uuid = CHR_KILL_DISPLAYED;
-    sel.skip_zero = true;  // no kills, no record
+    sel.gn_uuid = cursor;
+    sel.src_uuid = cursor;
+    sel.skip_zero = true;  // no records, nothing to select
+    sel.optional = cursor == CHR_ERROR_DISPLAYED;  // unconfirmed
     this->ops_.push_back(std::move(sel));
   };
   for (uint16_t id : {CHR_SERIAL, CHR_FIRMWARE, CHR_KILL_DISPLAYED})
     this->ops_.push_back(Op{OpKind::READ, id});
-  select_newest();
+  select_newest(CHR_KILL_DISPLAYED);
   for (uint16_t id : {CHR_KILL_PAYLOAD, CHR_KILL_READ, CHR_BATTERY_VOLTAGE, CHR_BATTERY_RESISTANCE, CHR_DEVICE_STATE,
-                      CHR_ERROR_DISPLAYED, CHR_ERROR_READ, CHR_ERROR_PAYLOAD}) {
+                      CHR_ERROR_DISPLAYED}) {
     this->ops_.push_back(Op{OpKind::READ, id});
   }
+  select_newest(CHR_ERROR_DISPLAYED);
+  for (uint16_t id : {CHR_ERROR_READ, CHR_ERROR_PAYLOAD})
+    this->ops_.push_back(Op{OpKind::READ, id});
   // Acknowledge, like the app at the end of every sync: the kills read so
-  // far, then 0x02 (after which the app disconnects). An A24 with kills
-  // nobody acknowledged keeps waking to report them; Kill Alert is kept by
-  // the gateway itself until Clear Kill Alert.
+  // far, then 0x02. Without 0x02 the trap keeps its strikes-available,
+  // new-event and new-error flags and keeps waking to report. It hangs up a
+  // couple of connection events after 0x02, and when that beats our
+  // disconnect (about half the time at ESP-IDF's default interval) it logs
+  // an error record, which Trap Error ignores. Kill Alert is kept by the
+  // gateway itself until Clear Kill Alert.
   Op ack_kill{OpKind::WRITE_ECHO_U16};
   ack_kill.gn_uuid = CHR_KILL_READ;
   ack_kill.src_uuid = CHR_KILL_DISPLAYED;
@@ -444,6 +444,7 @@ void GoodnatureConnection::push_a24_poll_ops_() {
   Op ctl{OpKind::WRITE};
   ctl.gn_uuid = CHR_CONTROL;
   ctl.data = {A24_CONTROL_ACK};
+  ctl.ends_session = true;
   this->ops_.push_back(std::move(ctl));
 }
 
@@ -517,7 +518,8 @@ void GoodnatureConnection::run_next_op_() {
         if (src == nullptr || src->size() < 2) {
           ESP_LOGW(TAG, "[%s] no value read from %04X to write to %04X", this->address_str(), op.src_uuid,
                    op.gn_uuid);
-          this->ok_so_far_ = false;
+          if (!op.optional)
+            this->ok_so_far_ = false;
           this->op_done_();
           return;
         }

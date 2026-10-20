@@ -79,8 +79,8 @@ constexpr const char *NUS_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";  // 
 constexpr const char *MEMFAULT_SERVICE_UUID = "54220000-f6a5-4007-a371-722f4ebd8436";
 
 // A24 control byte values written to CHR_CONTROL
-constexpr uint8_t A24_CONTROL_ACK = 0x02;
-constexpr uint8_t A24_CONTROL_TEST_FIRE = 0x05;
+constexpr uint8_t A24_CONTROL_ACK = 0x02;  // the app's end of sync; not sent, see push_a24_poll_ops_
+constexpr uint8_t A24_CONTROL_TEST_FIRE = 0x05;  // app setup, on movement; does not fire an A24
 
 // ---------------------------------------------------------------------------
 // Model
@@ -161,6 +161,25 @@ struct A24Strike {
 
 // Accepts either the raw 12+ byte record or its ASCII-hex representation.
 std::optional<A24Strike> parse_d30d(const uint8_t *data, size_t len);
+
+// A24 error record (CHR_ERROR_PAYLOAD, 17 bytes), as observed: [0..1] record
+// number, [2..5] minutes since the epoch, [6..9] the trap's ID, [10..13] a
+// u32 (13 or an nRF52 RAM address), [14..15] u16 and [16] u8, which may be a
+// source line and file. The app never reads it. The record returned is the
+// one CHR_ERROR_DISPLAYED was last set to.
+struct A24ErrorRecord {
+  uint16_t record;
+  uint32_t minutes_since_epoch;
+  uint32_t value;
+  uint16_t line;
+  uint8_t file;
+
+  // Logged when the trap hangs up on the closing 0x02 before the central
+  // disconnects; every record seen on two traps was this one.
+  bool session_end() const { return this->line == 2357 && this->file == 1; }
+};
+
+std::optional<A24ErrorRecord> parse_e772(const uint8_t *data, size_t len);
 
 // A24 advertisement: exactly six 16-bit service UUIDs (layout from the app).
 // [0], [1] serial; [2] flags (low byte) and device type (high byte);

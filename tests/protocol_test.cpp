@@ -116,6 +116,25 @@ static void test_d30d() {
   CHECK(!parse_d30d(rec, 11).has_value());
 }
 
+static void test_e772() {
+  // Records read from the two A24s (docs/ble-protocol.md, error channel).
+  const uint8_t trap2[17] = {0x02, 0x00, 0xD2, 0xDC, 0xC7, 0x01, 0x64, 0x01, 0x5C,
+                             0x79, 0x0D, 0x00, 0x00, 0x00, 0x35, 0x09, 0x01};
+  auto e = parse_e772(trap2, sizeof(trap2));
+  CHECK(e.has_value());
+  CHECK(e->record == 2 && e->minutes_since_epoch == 0x01C7DCD2 && e->value == 13);
+  CHECK(e->line == 2357 && e->file == 1 && e->session_end());
+  const uint8_t trap1[17] = {0x01, 0x00, 0xDD, 0xDC, 0xC7, 0x01, 0x44, 0x23, 0x26,
+                             0x97, 0x94, 0x59, 0x00, 0x20, 0x35, 0x09, 0x01};
+  auto f = parse_e772(trap1, sizeof(trap1));
+  CHECK(f.has_value() && f->value == 0x20005994 && f->session_end());
+  uint8_t other[17];
+  std::memcpy(other, trap2, sizeof(other));
+  other[14] = 0x10;  // a different source line
+  CHECK(!parse_e772(other, sizeof(other))->session_end());
+  CHECK(!parse_e772(trap2, 16).has_value());
+}
+
 static void test_a24_advertisement() {
   // The two payloads captured from one A24 (docs/ble-protocol.md), as the six
   // little-endian 16-bit service UUIDs: 44 23 26 97 26 00 34 12 FD D8 00 01
@@ -376,6 +395,7 @@ int main() {
   test_helpers();
   test_c20_advertisement();
   test_d30d();
+  test_e772();
   test_a24_advertisement();
   test_crc_and_framing();
   test_assembler();

@@ -37,6 +37,7 @@ enum class TrapButtonKind : uint8_t {
   CO2_SHOT_USED,
   FORGET,
   LOG_DEBUG,
+  CLEAR_ERROR,
 };
 
 // Work the gateway can do over a GATT connection to a trap.
@@ -77,7 +78,10 @@ struct TrapCache {
   uint8_t co2_extra_shots;  // manual shots not represented by the counter since anchoring
   uint32_t log_scanned_to;  // C20: striker log counted up to this epoch (0 = never)
   uint32_t last_full_scan;  // C20: epoch of the last replay of the whole log
-  uint32_t test_fires;      // C20: USER striker events seen in the whole log
+  union {
+    uint32_t test_fires;        // C20: USER striker events seen in the whole log
+    uint32_t a24_errors_judged;  // A24: newest error record already judged for Trap Error
+  };
   uint32_t kill_history_newest;  // C20: newest KillHistory time already counted (0 = none seen)
 } __attribute__((packed));
 
@@ -94,6 +98,8 @@ static constexpr uint8_t CACHE_CHARGING_KNOWN = 0x04;
 static constexpr uint8_t CACHE_CHARGING = 0x08;
 static constexpr uint8_t CACHE_KILL_ALERT_KNOWN = 0x10;
 static constexpr uint8_t CACHE_KILL_ALERT = 0x20;
+static constexpr uint8_t CACHE_TRAP_ERROR_KNOWN = 0x40;  // A24
+static constexpr uint8_t CACHE_TRAP_ERROR = 0x80;
 
 // Earliest start accepted for a Mouse Trap log window. A start of 0 made the
 // trap stream its events but never send the terminator, so full replays
@@ -139,8 +145,6 @@ class GoodnatureTrap {
   void set_battery_resistance_sensor(sensor::Sensor *s) { this->battery_resistance_sensor_ = s; }
   void set_strike_temperature_sensor(sensor::Sensor *s) { this->strike_temperature_sensor_ = s; }
   void set_rssi_sensor(sensor::Sensor *s) { this->rssi_sensor_ = s; }
-  void set_last_seen_sensor(sensor::Sensor *s) { this->last_seen_sensor_ = s; }
-  void set_last_strike_sensor(sensor::Sensor *s) { this->last_strike_sensor_ = s; }
   void set_lure_age_sensor(sensor::Sensor *s) { this->lure_age_sensor_ = s; }
   void set_lure_remaining_sensor(sensor::Sensor *s) { this->lure_remaining_sensor_ = s; }
   void set_co2_remaining_sensor(sensor::Sensor *s) { this->co2_remaining_sensor_ = s; }
@@ -174,6 +178,9 @@ class GoodnatureTrap {
   void set_last_frame_text_sensor(text_sensor::TextSensor *s) { this->last_frame_ts_ = s; }
   void set_error_data_text_sensor(text_sensor::TextSensor *s) { this->error_data_ts_ = s; }
   void set_trap_state_text_sensor(text_sensor::TextSensor *s) { this->trap_state_ts_ = s; }
+  // Timestamps as ISO 8601 text: a float sensor rounds epoch seconds to 128 s.
+  void set_last_seen_text_sensor(text_sensor::TextSensor *s) { this->last_seen_ts_ = s; }
+  void set_last_strike_text_sensor(text_sensor::TextSensor *s) { this->last_strike_ts_ = s; }
   void set_lure_date(ReplacedDate *d) { this->lure_date_ = d; }
   void set_co2_date(ReplacedDate *d) { this->co2_date_ = d; }
 
@@ -210,6 +217,8 @@ class GoodnatureTrap {
   // gateway's own (the trap is acknowledged in every session, like the app
   // does), so this only clears it, at once and without the trap.
   void clear_kill_alert();
+  // A24: turn Trap Error off; it stays on until this is pressed.
+  void clear_trap_error();
   // Why a test fire must not be sent now (the app's conditions for a Mouse
   // Trap: state known, no error, off USB, no kill waiting, tray closed), or
   // nullptr when it may.
@@ -305,6 +314,7 @@ class GoodnatureTrap {
   void note_trigger_details_(const protocol::C20TriggerEvent &t);
   void publish_details_();
   void apply_a24_error_counter_(uint16_t short_id, const uint8_t *data, size_t len);
+  void judge_a24_error_(const uint8_t *data, size_t len);
   void apply_a24_advertisement_(const protocol::A24Advertisement &adv);
   // A24: turn Kill Alert on until Clear Kill Alert.
   void raise_kill_alert_(const char *why);
@@ -372,6 +382,7 @@ class GoodnatureTrap {
   std::optional<uint8_t> battery_resistance_;    // A24: FAD2 or the advertisement
   std::optional<int8_t> strike_temperature_;     // A24: from the newest kill record
   std::optional<bool> error_flag_;               // A24: the advertisement's new-error bit
+  std::optional<bool> trap_error_;               // A24: latched from error records, until Clear Trap Error
   std::optional<protocol::C20DeviceState> device_state_;  // C20
   std::optional<bool> tray_open_;                         // C20
   std::optional<int16_t> battery_mv_;  // C20, from InputStates
@@ -436,9 +447,9 @@ class GoodnatureTrap {
   std::optional<bool> kill_alert_pub_, battery_low_pub_, charging_pub_, active_pub_, lure_due_pub_, co2_low_pub_,
       online_pub_, battery_recovery_pub_, error_pub_;
   std::optional<std::string> model_pub_, battery_status_pub_, serial_pub_, firmware_pub_, bootloader_pub_, mac_pub_,
-      status_pub_, error_data_pub_, trap_state_pub_;
-  std::optional<float> strikes_pub_, battery_pub_, co2_pub_, lure_age_pub_, lure_remaining_pub_, last_strike_pub_,
-      last_seen_pub_, volts_pub_, resistance_pub_, temperature_pub_, peak_fire_pub_, peak_rewind_pub_;
+      status_pub_, error_data_pub_, trap_state_pub_, last_strike_pub_, last_seen_pub_;
+  std::optional<float> strikes_pub_, battery_pub_, co2_pub_, lure_age_pub_, lure_remaining_pub_, volts_pub_,
+      resistance_pub_, temperature_pub_, peak_fire_pub_, peak_rewind_pub_;
 
   // Latest trigger-event readings (Mouse Trap)
   enum TriggerReading : uint8_t {
@@ -460,8 +471,6 @@ class GoodnatureTrap {
   sensor::Sensor *battery_resistance_sensor_{nullptr};
   sensor::Sensor *strike_temperature_sensor_{nullptr};
   sensor::Sensor *rssi_sensor_{nullptr};
-  sensor::Sensor *last_seen_sensor_{nullptr};
-  sensor::Sensor *last_strike_sensor_{nullptr};
   sensor::Sensor *lure_age_sensor_{nullptr};
   sensor::Sensor *lure_remaining_sensor_{nullptr};
   sensor::Sensor *co2_remaining_sensor_{nullptr};
@@ -487,6 +496,8 @@ class GoodnatureTrap {
   text_sensor::TextSensor *last_frame_ts_{nullptr};
   text_sensor::TextSensor *error_data_ts_{nullptr};
   text_sensor::TextSensor *trap_state_ts_{nullptr};
+  text_sensor::TextSensor *last_seen_ts_{nullptr};
+  text_sensor::TextSensor *last_strike_ts_{nullptr};
   ReplacedDate *lure_date_{nullptr};
   ReplacedDate *co2_date_{nullptr};
   number::Number *lure_life_number_{nullptr};

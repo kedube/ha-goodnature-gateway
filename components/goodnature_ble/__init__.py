@@ -356,25 +356,6 @@ TRAP_SENSORS = [
         },
     ),
     (
-        "last_seen",
-        "Last Seen",
-        "set_last_seen_sensor",
-        {
-            CONF_DEVICE_CLASS: DEVICE_CLASS_TIMESTAMP,
-            CONF_ACCURACY_DECIMALS: 0,
-            CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
-        },
-    ),
-    (
-        "last_strike",
-        "Last Strike",
-        "set_last_strike_sensor",
-        {
-            CONF_DEVICE_CLASS: DEVICE_CLASS_TIMESTAMP,
-            CONF_ACCURACY_DECIMALS: 0,
-        },
-    ),
-    (
         # A24 only: air temperature in the newest kill record.
         "last_strike_temperature",
         "Last Strike Temperature",
@@ -537,6 +518,20 @@ TRAP_TEXT_SENSORS = [
         "set_status_text_sensor",
         {CONF_ICON: "mdi:list-status", CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC},
     ),
+    # Timestamps as ISO 8601 text: Home Assistant parses them exactly, where
+    # a float sensor rounds epoch seconds to 128 s.
+    (
+        "last_seen",
+        "Last Seen",
+        "set_last_seen_text_sensor",
+        {CONF_DEVICE_CLASS: DEVICE_CLASS_TIMESTAMP, CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC},
+    ),
+    (
+        "last_strike",
+        "Last Strike",
+        "set_last_strike_text_sensor",
+        {CONF_DEVICE_CLASS: DEVICE_CLASS_TIMESTAMP},
+    ),
     # Raw captures, only populated while the gateway's Debug Mode switch is on.
     (
         "last_advertisement",
@@ -602,6 +597,16 @@ TRAP_BUTTONS = [
         "RESET_ALERT",
         {
             CONF_ICON: "mdi:notification-clear-all",
+            CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_CONFIG,
+        },
+    ),
+    (
+        # A24 only: Trap Error stays on until this is pressed.
+        "clear_error",
+        "Clear Trap Error",
+        "CLEAR_ERROR",
+        {
+            CONF_ICON: "mdi:alert-remove-outline",
             CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_CONFIG,
         },
     ),

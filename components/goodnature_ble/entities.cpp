@@ -21,6 +21,9 @@ void TrapButton::press_action() {
       trap->clear_backoff();
       trap->clear_kill_alert();
       break;
+    case TrapButtonKind::CLEAR_ERROR:
+      trap->clear_trap_error();
+      break;
     case TrapButtonKind::LURE_REPLACED:
       trap->mark_lure_replaced();
       break;

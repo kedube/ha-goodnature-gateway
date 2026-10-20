@@ -9,6 +9,7 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include "esphome/core/time.h"
 
 #include <algorithm>
 #include <cmath>
@@ -81,6 +82,13 @@ static void publish_text(text_sensor::TextSensor *ts, std::optional<std::string>
   }
 }
 
+// ISO 8601 in UTC, for the timestamp text sensors.
+static std::string iso_utc(uint32_t epoch) {
+  char buf[32];
+  ESPTime::from_epoch_utc(epoch).strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S+00:00");
+  return buf;
+}
+
 static void publish_float(sensor::Sensor *s, std::optional<float> &cache, float value) {
   if (s == nullptr)
     return;
@@ -130,8 +138,7 @@ void GoodnatureTrap::register_with_app() {
   if (this->device_ != nullptr)
     App.register_device(this->device_);
 #endif
-  for (sensor::Sensor *s : {this->strikes_sensor_, this->rssi_sensor_,
-                            this->last_seen_sensor_, this->last_strike_sensor_, this->lure_age_sensor_,
+  for (sensor::Sensor *s : {this->strikes_sensor_, this->rssi_sensor_, this->lure_age_sensor_,
                             this->lure_remaining_sensor_}) {
     if (s != nullptr)
       App.register_sensor(s);
@@ -172,7 +179,7 @@ void GoodnatureTrap::register_with_app() {
   }
   for (text_sensor::TextSensor *t : {this->model_ts_, this->serial_ts_, this->firmware_ts_, this->mac_ts_,
                                      this->status_ts_, this->last_adv_ts_, this->last_frame_ts_,
-                                     this->battery_status_ts_}) {
+                                     this->battery_status_ts_, this->last_seen_ts_, this->last_strike_ts_}) {
     if (t != nullptr)
       App.register_text_sensor(t);
   }
@@ -186,6 +193,10 @@ void GoodnatureTrap::register_with_app() {
     App.register_text_sensor(this->error_data_ts_);
   for (const auto &sb : this->buttons_) {
     if (mouse && (sb.kind == TrapButtonKind::CO2_REPLACED || sb.kind == TrapButtonKind::CO2_SHOT_USED))
+      continue;
+    if (a24 && sb.kind == TrapButtonKind::TEST_FIRE)
+      continue;
+    if (mouse && sb.kind == TrapButtonKind::CLEAR_ERROR)
       continue;
     App.register_button(sb.button);
   }
@@ -284,6 +295,8 @@ void GoodnatureTrap::save_cache_() {
     flags |= CACHE_CHARGING_KNOWN | (*this->charging_ ? CACHE_CHARGING : 0);
   if (this->kill_alert_.has_value())
     flags |= CACHE_KILL_ALERT_KNOWN | (*this->kill_alert_ ? CACHE_KILL_ALERT : 0);
+  if (this->trap_error_.has_value())
+    flags |= CACHE_TRAP_ERROR_KNOWN | (*this->trap_error_ ? CACHE_TRAP_ERROR : 0);
   this->cache_.flags = flags;
   if (!this->cache_pref_.save(&this->cache_))
     ESP_LOGW(TAG, "Slot %u: failed to save cached readings", this->index_ + 1);
@@ -319,6 +332,8 @@ void GoodnatureTrap::restore_from_cache_() {
     this->charging_ = (this->cache_.flags & CACHE_CHARGING) != 0;
   if (this->cache_.flags & CACHE_KILL_ALERT_KNOWN)
     this->kill_alert_ = (this->cache_.flags & CACHE_KILL_ALERT) != 0;
+  if (this->cache_.flags & CACHE_TRAP_ERROR_KNOWN)
+    this->trap_error_ = (this->cache_.flags & CACHE_TRAP_ERROR) != 0;
 }
 
 void GoodnatureTrap::save_prefs_(bool flush) {
@@ -352,6 +367,7 @@ void GoodnatureTrap::reset_runtime_state_() {
   this->battery_resistance_.reset();
   this->strike_temperature_.reset();
   this->error_flag_.reset();
+  this->trap_error_.reset();
   this->battery_mv_.reset();
   this->bootloader_.clear();
   this->kill_history_received_ = false;
@@ -452,8 +468,6 @@ void GoodnatureTrap::unbind() {
     this->trigger_pub_[i].reset();
   }
   clear_sensor(this->rssi_sensor_);
-  clear_sensor(this->last_seen_sensor_);
-  clear_sensor(this->last_strike_sensor_);
   clear_sensor(this->lure_age_sensor_);
   clear_sensor(this->lure_remaining_sensor_);
   clear_sensor(this->co2_remaining_sensor_);
@@ -464,8 +478,6 @@ void GoodnatureTrap::unbind() {
   this->temperature_pub_.reset();
   this->peak_fire_pub_.reset();
   this->peak_rewind_pub_.reset();
-  this->last_seen_pub_.reset();
-  this->last_strike_pub_.reset();
   this->lure_age_pub_.reset();
   this->lure_remaining_pub_.reset();
   this->co2_pub_.reset();
@@ -486,6 +498,8 @@ void GoodnatureTrap::unbind() {
   if (this->last_frame_ts_ != nullptr)
     this->last_frame_ts_->publish_state("");
   publish_text(this->battery_status_ts_, this->battery_status_pub_, "");
+  publish_text(this->last_seen_ts_, this->last_seen_pub_, "");
+  publish_text(this->last_strike_ts_, this->last_strike_pub_, "");
   this->publish_identity_();
   this->set_status_(this->status_);
 }
@@ -725,8 +739,14 @@ void GoodnatureTrap::apply_a24_characteristic(uint16_t short_id, const uint8_t *
         this->kill_read_ = *v;
         // Kills nobody has acknowledged (the gateway and the app both do so
         // every session): ones it missed, e.g. while it was off.
-        if (this->kill_displayed_.has_value() && *this->kill_displayed_ > *v && this->active_job_ != Job::TEST_FIRE)
+        if (this->kill_displayed_.has_value() && *this->kill_displayed_ > *v && this->active_job_ != Job::TEST_FIRE) {
           this->raise_kill_alert_("unacknowledged kills on the trap");
+        } else if (this->kill_displayed_.has_value() && *this->kill_displayed_ <= *v && !this->kill_alert_.has_value()) {
+          // Nothing pending and nothing remembered (new slot or reset cache):
+          // start from off rather than unknown. A remembered alert stays.
+          this->kill_alert_ = false;
+          this->save_cache_();
+        }
       }
       break;
     }
@@ -736,7 +756,20 @@ void GoodnatureTrap::apply_a24_characteristic(uint16_t short_id, const uint8_t *
         ESP_LOGD(TAG, "[%s] strike %u at %u, %d C", this->address_str_, strike->strike_id,
                  (unsigned) strike->epoch_seconds(), strike->temperature);
         if (strike->strike_id != 0) {  // 0: no record
-          this->note_strike_epoch_(strike->epoch_seconds());
+          uint32_t epoch = strike->epoch_seconds();
+          uint32_t now = this->hub_->now_epoch();
+          // The newest record's own time replaces the "now" stamped when D20D
+          // went up earlier in this session: that is when the gateway noticed,
+          // and an A24 may have slept on the kill for hours.
+          if (this->kill_displayed_.has_value() && strike->strike_id == *this->kill_displayed_ &&
+              epoch >= 1500000000UL && (now == 0 || epoch <= now + 120)) {
+            if (epoch != this->prefs_.last_strike) {
+              this->prefs_.last_strike = epoch;
+              this->save_prefs_();
+            }
+          } else {
+            this->note_strike_epoch_(epoch);
+          }
           this->strike_temperature_ = strike->temperature;
         }
       }
@@ -764,6 +797,7 @@ void GoodnatureTrap::apply_a24_characteristic(uint16_t short_id, const uint8_t *
     case CHR_ERROR_PAYLOAD:
       ESP_LOGD(TAG, "[%s] error data: %s", this->address_str_, to_hex(data, len).c_str());
       this->error_data_ = to_hex(data, len);
+      this->judge_a24_error_(data, len);
       break;
     default:
       ESP_LOGV(TAG, "[%s] %04X: %s", this->address_str_, short_id, to_hex(data, len).c_str());
@@ -811,8 +845,10 @@ void GoodnatureTrap::clear_kill_alert() {
 }
 
 const char *GoodnatureTrap::test_fire_blocked() const {
+  // The A24's Smart Cap only counts strikes; the app's test fire is a stick
+  // on the trigger. Its 0x05 was written to two traps and fired neither.
   if (this->model() != Model::C20)
-    return nullptr;
+    return "only a Mouse Trap can be fired remotely";
   if (!this->device_state_.has_value())
     return "trap state not read yet";
   if (*this->device_state_ == C20DeviceState::ERROR)
@@ -847,6 +883,51 @@ void GoodnatureTrap::apply_a24_error_counter_(uint16_t short_id, const uint8_t *
   ESP_LOGD(TAG, "[%s] error %s: %u", this->address_str_, short_id == CHR_ERROR_DISPLAYED ? "displayed" : "read",
            (unsigned) *v);
   (short_id == CHR_ERROR_DISPLAYED ? this->error_displayed_ : this->error_read_) = *v;
+  if (short_id == CHR_ERROR_DISPLAYED && *v == 0 && !this->trap_error_.has_value()) {
+    this->trap_error_ = false;
+    this->save_cache_();
+  }
+}
+
+// Trap Error comes from the error records rather than the advertisement's
+// new-error flag: the trap also logs a record, and sets that flag, whenever
+// it hangs up on the closing 0x02 before we disconnect. Those records are
+// ignored; any other kind latches Trap Error until Clear Trap Error. Only the
+// newest record is read, so of several new ones only the last is judged.
+void GoodnatureTrap::judge_a24_error_(const uint8_t *data, size_t len) {
+  auto rec = parse_e772(data, len);
+  if (!rec.has_value() || rec->record == 0 || !this->error_displayed_.has_value() ||
+      rec->record != *this->error_displayed_)
+    return;  // not the newest record (the cursor write was refused?)
+  uint32_t judged = this->cache_.a24_errors_judged;
+  if (rec->record < judged)
+    judged = 0;  // the trap's error log restarted
+  bool changed = !this->trap_error_.has_value();
+  if (changed)
+    this->trap_error_ = false;
+  if (rec->record > judged) {
+    if (rec->session_end()) {
+      ESP_LOGD(TAG, "[%s] error record %u is a session-end record; ignored", this->address_str_,
+               (unsigned) rec->record);
+    } else {
+      ESP_LOGW(TAG, "[%s] trap error: record %u, value %u, line %u, file %u", this->address_str_,
+               (unsigned) rec->record, (unsigned) rec->value, (unsigned) rec->line, (unsigned) rec->file);
+      this->trap_error_ = true;
+    }
+    changed = true;
+  }
+  this->cache_.a24_errors_judged = rec->record;
+  if (changed)
+    this->save_cache_();
+}
+
+void GoodnatureTrap::clear_trap_error() {
+  if (this->model() == Model::C20)
+    return;  // the Mouse Trap's error is its device state
+  this->trap_error_ = false;
+  this->save_cache_();
+  publish_if_changed(this->error_bs_, this->error_pub_, false);
+  this->set_status_("Error cleared");
 }
 
 void GoodnatureTrap::publish_error_() {
@@ -855,8 +936,8 @@ void GoodnatureTrap::publish_error_() {
       publish_if_changed(this->error_bs_, this->error_pub_, *this->device_state_ == C20DeviceState::ERROR);
     return;
   }
-  if (this->error_flag_.has_value())
-    publish_if_changed(this->error_bs_, this->error_pub_, *this->error_flag_);
+  if (this->trap_error_.has_value())
+    publish_if_changed(this->error_bs_, this->error_pub_, *this->trap_error_);
   if (!this->error_data_.empty())
     publish_text(this->error_data_ts_, this->error_data_pub_, this->error_data_);
 }
@@ -1198,10 +1279,8 @@ void GoodnatureTrap::apply_history_() {
   this->prefs_.last_strike = last;
   this->have_device_counter_ = true;
   this->save_prefs_(increased);
-  if (last == 0 && this->last_strike_sensor_ != nullptr && this->last_strike_pub_.has_value()) {
-    this->last_strike_sensor_->publish_state(NAN);
-    this->last_strike_pub_.reset();
-  }
+  if (last == 0 && this->last_strike_pub_.has_value())
+    publish_text(this->last_strike_ts_, this->last_strike_pub_, "");
   this->publish_counters_();
   if (increased && this->strike_event_ != nullptr)
     this->strike_event_->trigger("strike");
@@ -1497,7 +1576,7 @@ void GoodnatureTrap::publish_counters_() {
   if (counter_known)
     publish_float(this->strikes_sensor_, this->strikes_pub_, static_cast<float>(this->prefs_.strikes));
   if (this->prefs_.last_strike != 0)
-    publish_float(this->last_strike_sensor_, this->last_strike_pub_, static_cast<float>(this->prefs_.last_strike));
+    publish_text(this->last_strike_ts_, this->last_strike_pub_, iso_utc(this->prefs_.last_strike));
   if (this->kill_alert_.has_value())
     publish_if_changed(this->kill_alert_bs_, this->kill_alert_pub_, *this->kill_alert_);
 }
@@ -1597,7 +1676,7 @@ void GoodnatureTrap::publish_dates_() {
 
 void GoodnatureTrap::publish_last_seen_() {
   if (this->last_seen_epoch_ != 0)
-    publish_float(this->last_seen_sensor_, this->last_seen_pub_, static_cast<float>(this->last_seen_epoch_));
+    publish_text(this->last_seen_ts_, this->last_seen_pub_, iso_utc(this->last_seen_epoch_));
 }
 
 void GoodnatureTrap::publish_online_() {
@@ -1675,6 +1754,8 @@ void GoodnatureTrap::log_debug_info() const {
     ESP_LOGI(TAG, "  error_displayed=%d error_read=%d error_data='%s'",
              this->error_displayed_ ? (int) *this->error_displayed_ : -1,
              this->error_read_ ? (int) *this->error_read_ : -1, this->error_data_.c_str());
+    ESP_LOGI(TAG, "  trap_error=%s errors_judged=%u adv_new_error=%s", opt_bool(this->trap_error_),
+             (unsigned) this->cache_.a24_errors_judged, opt_bool(this->error_flag_));
   }
   ESP_LOGI(TAG, "  last_seen=%u s ago (epoch %u) rssi=%d bursts=%u needs_poll=%s",
            (unsigned) (this->last_seen_ms_ ? (now_ms - this->last_seen_ms_) / 1000 : 0),

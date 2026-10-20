@@ -338,7 +338,7 @@ async def cmd_capture(gw: Gateway, args) -> None:
 
     watch = {(e.device_id, e.key): e for e in gw.entities if e.name in ("Last Advertisement", "Last Frame", "Status", "Strikes",
                                                           "Battery", "Battery Voltage Raw", "Model", "Firmware",
-                                                          "Serial Number")}
+                                                          "Serial Number", "Kill Alert", "Trap Error")}
     last = {}
 
     def on_state(s):

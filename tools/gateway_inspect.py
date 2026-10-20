@@ -72,8 +72,8 @@ C20_BATTERY_STATE = ("STARTUP", "NOT_CONNECTED", "CRITICAL", "LOW", "NORMAL", "N
 C20_CHARGE_STATE = ("NOT_CHARGING", "CHARGING", "NO_DATA")
 C20_USB_STATE = ("DISCONNECTED", "CONNECTED", "NO_DATA")
 C20_STRIKER_SOURCE = ("TRIGGER", "UNUSED", "USER", "NO_DATA")
-C20_ADV_FLAG_BITS = {0x01: "activated?", 0x02: "strikes_available?", 0x08: "low_battery?",
-                     0x10: "charging?", 0x20: "usb?", 0x40: "discoverable?"}
+C20_ADV_FLAG_BITS = {0x01: "activated?", 0x02: "kill_alert", 0x08: "low_battery?",
+                     0x10: "charging", 0x20: "usb?", 0x40: "discoverable?"}
 NORDIC_MFG_RE = re.compile(r"(?:mfg=\[0x0059:|ff5900)([0-9a-fA-F]{18})")
 
 

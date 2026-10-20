@@ -10,12 +10,15 @@ void TrapButton::press_action() {
   switch (this->kind_) {
     case TrapButtonKind::POLL:
       trap->request_full_rescan();  // a manual poll also resyncs the strike count
+      trap->clear_backoff();
       hub->request_job(trap, Job::POLL);
       break;
     case TrapButtonKind::TEST_FIRE:
+      trap->clear_backoff();
       hub->request_job(trap, Job::TEST_FIRE);
       break;
     case TrapButtonKind::RESET_ALERT:
+      trap->clear_backoff();
       hub->request_job(trap, Job::RESET_ALERT);
       break;
     case TrapButtonKind::LURE_REPLACED:

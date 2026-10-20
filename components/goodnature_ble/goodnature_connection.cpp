@@ -84,6 +84,7 @@ void GoodnatureConnection::start(GoodnatureTrap *trap, Job job) {
   this->assembler_.reset();
   this->nus_rx_ = nullptr;
   this->nus_tx_ = nullptr;
+  this->uart_error_[0] = '\0';
   this->job_started_ms_ = millis();
 
   this->set_address(trap->address());
@@ -231,6 +232,8 @@ bool GoodnatureConnection::gattc_event_handler(esp_gattc_cb_event_t event, esp_g
     case ESP_GATTC_WRITE_CHAR_EVT:
       if (this->op_in_flight_ && param->write.handle == this->current_handle_) {
         const Op &op = this->ops_[this->op_index_];
+        if (op.command && param->write.status == ESP_GATT_OK)
+          this->trap_->on_command_delivered(this->job_);
         if (op.kind == OpKind::WRITE || op.kind == OpKind::WRITE_ECHO_U16) {
           if (param->write.status != ESP_GATT_OK) {
             ESP_LOGW(TAG, "[%s] write %04X failed, status %d", this->address_str(), op.gn_uuid, param->write.status);
@@ -242,6 +245,10 @@ bool GoodnatureConnection::gattc_event_handler(esp_gattc_cb_event_t event, esp_g
           ESP_LOGW(TAG, "[%s] UART write failed, status %d", this->address_str(), param->write.status);
           this->ok_so_far_ = false;
           this->op_done_();
+        } else if (op.command && this->uart_error_[0] != '\0') {
+          // Without notifications the trap's answer cannot arrive; the write
+          // acknowledgement is all the confirmation there is.
+          this->op_done_();
         }
       }
       break;
@@ -252,6 +259,8 @@ bool GoodnatureConnection::gattc_event_handler(esp_gattc_cb_event_t event, esp_g
         ESP_LOGW(TAG, "[%s] register for notify failed, status %d", this->address_str(),
                  param->reg_for_notify.status);
         this->ok_so_far_ = false;
+        snprintf(this->uart_error_, sizeof(this->uart_error_), "notify registration failed (status %d)",
+                 param->reg_for_notify.status);
         this->op_done_();
       }
       // On success the base class writes the CCCD; we continue on WRITE_DESCR.
@@ -260,8 +269,13 @@ bool GoodnatureConnection::gattc_event_handler(esp_gattc_cb_event_t event, esp_g
     case ESP_GATTC_WRITE_DESCR_EVT:
       if (this->op_in_flight_ && this->ops_[this->op_index_].kind == OpKind::NOTIFY_ON) {
         if (param->write.status != ESP_GATT_OK) {
-          ESP_LOGW(TAG, "[%s] enabling notifications failed, status %d", this->address_str(), param->write.status);
+          // Seen as 17 (ATT Insufficient Resources) from Mouse Traps that kept
+          // refusing after a power cycle. RX writes are still acted on.
+          ESP_LOGW(TAG, "[%s] enabling notifications failed, status %d; skipping UART requests", this->address_str(),
+                   param->write.status);
           this->ok_so_far_ = false;
+          snprintf(this->uart_error_, sizeof(this->uart_error_), "trap refused notifications (status %d)",
+                   param->write.status);
         }
         this->op_done_();
       }
@@ -276,10 +290,13 @@ bool GoodnatureConnection::gattc_event_handler(esp_gattc_cb_event_t event, esp_g
       break;
 
     case ESP_GATTC_DISCONNECT_EVT:
-    case ESP_GATTC_CLOSE_EVT:
-      this->finish_(this->disconnect_requested_ && this->ok_so_far_,
-                    this->disconnect_requested_ ? (this->ok_so_far_ ? "done" : "partial") : "disconnected");
+    case ESP_GATTC_CLOSE_EVT: {
+      const char *reason = "disconnected";
+      if (this->disconnect_requested_)
+        reason = this->ok_so_far_ ? "done" : (this->uart_error_[0] != '\0' ? this->uart_error_ : "partial");
+      this->finish_(this->disconnect_requested_ && this->ok_so_far_, reason);
       break;
+    }
 
     default:
       break;
@@ -359,6 +376,7 @@ void GoodnatureConnection::build_ops_() {
       Op cmd{OpKind::C20_REQUEST};
       cmd.expect_type = C20_TYPE_SET_COMMAND;
       cmd.data = c20_build_set_command(this->job_ == Job::TEST_FIRE ? C20_COMMAND_FIRE : C20_COMMAND_CLEAR);
+      cmd.command = true;
       this->ops_.push_back(std::move(cmd));
       // Let the async DeviceState / StrikerEvent notifications land.
       Op wait{OpKind::WAIT};
@@ -381,6 +399,7 @@ void GoodnatureConnection::build_ops_() {
     Op ctl{OpKind::WRITE};
     ctl.gn_uuid = CHR_CONTROL;
     ctl.data = {A24_CONTROL_TEST_FIRE};
+    ctl.command = true;
     this->ops_.push_back(std::move(ctl));
     Op wait{OpKind::WAIT};
     wait.wait_ms = 500;
@@ -403,6 +422,8 @@ void GoodnatureConnection::build_ops_() {
     ack_event.gn_uuid = CHR_EVENT_READ;
     ack_event.src_uuid = CHR_EVENT_DISPLAYED;
     this->ops_.push_back(std::move(ack_event));
+    // Not marked as a command: the clear also needs the two acknowledgements
+    // above, so a session that fails is retried in full.
     Op ctl{OpKind::WRITE};
     ctl.gn_uuid = CHR_CONTROL;
     ctl.data = {A24_CONTROL_ACK};
@@ -520,6 +541,7 @@ void GoodnatureConnection::run_next_op_() {
       if (this->nus_tx_ == nullptr || this->nus_rx_ == nullptr) {
         ESP_LOGW(TAG, "[%s] Nordic UART service not found", this->address_str());
         this->ok_so_far_ = false;
+        snprintf(this->uart_error_, sizeof(this->uart_error_), "no Nordic UART service");
         this->request_disconnect_();
         return;
       }
@@ -527,6 +549,7 @@ void GoodnatureConnection::run_next_op_() {
       if (err != ESP_OK) {
         ESP_LOGW(TAG, "[%s] register for notify request failed, err %d", this->address_str(), err);
         this->ok_so_far_ = false;
+        snprintf(this->uart_error_, sizeof(this->uart_error_), "notify registration failed (err %d)", err);
         this->op_done_();
       }
       break;
@@ -535,6 +558,11 @@ void GoodnatureConnection::run_next_op_() {
     case OpKind::C20_REQUEST:
     case OpKind::C20_LOGS: {
       if (this->nus_rx_ == nullptr) {
+        this->op_done_();
+        return;
+      }
+      if (this->uart_error_[0] != '\0' && !op.command) {
+        // No notifications, so no answer can arrive: skip instead of timing out.
         this->op_done_();
         return;
       }

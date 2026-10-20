@@ -304,6 +304,7 @@ void GoodnatureTrap::reset_runtime_state_() {
   this->adv_flags_raw_ = 0xFF;
   this->adv_battery_state_raw_ = 0xFF;
   this->adv_word6_raw_ = 0xFFFF;
+  this->adv_alert_bit_.reset();
   this->kill_displayed_.reset();
   this->kill_read_.reset();
   this->kill_alert_.reset();
@@ -322,6 +323,7 @@ void GoodnatureTrap::reset_runtime_state_() {
   this->activation_needs_poll_ = false;
   this->pending_job_ = Job::NONE;
   this->active_job_ = Job::NONE;
+  this->command_delivered_ = false;
   this->last_poll_ms_ = this->last_poll_epoch_ = this->last_attempt_ms_ = 0;
   this->consecutive_failures_ = 0;
   this->ever_polled_ = false;
@@ -464,8 +466,8 @@ void GoodnatureTrap::on_advertisement(const esp32_ble_tracker::ESPBTDevice &devi
     // The Mouse Trap advertises continuously: serial and total strike count
     // are reliable here. Battery percentage, armed and charging state come
     // from the UART poll; the advertisement only carries the battery state
-    // enumeration in byte 8, and byte 5 does not match the documented flag
-    // bits on real hardware, so it is logged rather than trusted.
+    // enumeration in byte 8, and byte 5 only partly matches the documented
+    // flag bits, so apart from the kill alert bit it is logged, not trusted.
     if (this->prefs_.serial_raw != c20_adv->serial_number_raw) {
       this->prefs_.serial_raw = c20_adv->serial_number_raw;
       this->save_prefs_();
@@ -485,11 +487,15 @@ void GoodnatureTrap::on_advertisement(const esp32_ble_tracker::ESPBTDevice &devi
       this->adv_flags_raw_ = c20_adv->flags;
       this->adv_battery_state_raw_ = c20_adv->battery_state_raw;
     }
-    // Documented as "strikes available"; unverified on real hardware, so it
-    // can only raise the alert. Clearing is left to the trap's kill state
-    // read during a poll, or to Clear Kill Alert.
-    if (c20_adv->strikes_available)
-      this->kill_alert_ = true;
+    // Documented as "strikes available". It follows the kill alert: on a real
+    // Mouse Trap it went off seconds after SetCommand(CLEAR). The newest
+    // reading wins: this bit when first heard or when it changes, the kill
+    // state when a poll reads it. Traps that cannot be polled still clear.
+    if (this->adv_alert_bit_ != c20_adv->strikes_available) {
+      this->adv_alert_bit_ = c20_adv->strikes_available;
+      this->kill_alert_ = c20_adv->strikes_available;
+      publish_if_changed(this->kill_alert_bs_, this->kill_alert_pub_, c20_adv->strikes_available);
+    }
     switch (static_cast<C20BatteryState>(c20_adv->battery_state_raw)) {
       case C20BatteryState::NORMAL:
         this->battery_low_ = false;
@@ -776,7 +782,16 @@ void GoodnatureTrap::on_job_started(Job job) {
   this->hist_user_count_ = 0;
   this->hist_last_trigger_epoch_ = 0;
   this->hist_complete_ = false;
+  this->command_delivered_ = false;
   this->set_status_("Connecting");
+}
+
+void GoodnatureTrap::on_command_delivered(Job job) {
+  // The trap has acted on it even if the rest of the session fails, so it is
+  // never sent again: a retried Test Fire would fire the trap twice.
+  this->command_delivered_ = true;
+  if (this->pending_job_ == job)
+    this->pending_job_ = Job::NONE;
 }
 
 void GoodnatureTrap::on_job_finished(Job job, bool ok, const char *reason) {
@@ -821,7 +836,13 @@ void GoodnatureTrap::on_job_finished(Job job, bool ok, const char *reason) {
       ESP_LOGW(TAG, "[%s] giving up on requested action after repeated failures", this->address_str_);
       this->pending_job_ = Job::NONE;
     }
-    this->set_status_(std::string("Failed: ") + reason);
+    if (this->command_delivered_) {
+      // The command got through; only the poll after it failed.
+      this->set_status_(std::string(job == Job::TEST_FIRE ? "Test fire sent" : "Clear sent") +
+                        "; poll failed: " + reason);
+    } else {
+      this->set_status_(std::string("Failed: ") + reason);
+    }
   }
   this->publish_all();
 }

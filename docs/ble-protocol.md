@@ -41,7 +41,7 @@ The first two UUID slots contain `44 23 26 97`, yielding serial `97262344` when 
 |---|---|
 | 0–3 | serial number, u32 LE, shown as 8 hex digits |
 | 4 | device type |
-| 5 | flags per the reference integration: `0x01` activated, `0x02` strikes available, `0x08` low battery, `0x10` charging, `0x20` USB connected, `0x40` discoverable. **Unverified**: two Mouse Traps (firmware 0.3.730) that were activated, closed and not charging both sent `0x04`. |
+| 5 | flags per the reference integration: `0x01` activated, `0x02` strikes available, `0x08` low battery, `0x10` charging, `0x20` USB connected, `0x40` discoverable. **Observed** on two Mouse Traps (firmware 0.3.730), only partly matching: `0x02` tracks the kill alert (`0x06` with an alert, `0x04` about 6 s after SetCommand(CLEAR), still `0x04` after a power cycle). `0x10` tracks charging: `0x34` while the poll said CHARGING, `0x24` once it said NOT_CHARGING. `0x20` was set throughout that charge, consistent with USB connected. Activated traps send `0x04`, never `0x01`; `0x04` is not in the reference layout. `0x08` and `0x40` not yet seen. |
 | 6–7 | strike count, u16 LE. Matches the lifetime total the app shows. |
 | 8 | documented as battery percent. On the Mouse Trap it is the **battery state** enumeration (`4` = NORMAL) while the UART battery level said 92 %, so the gateway treats it as a state and takes the percentage from the poll. |
 
@@ -125,6 +125,8 @@ Enumerations (index → meaning):
 - striker source: TRIGGER, UNUSED, USER, NO_DATA (USER = manual test fire)
 
 Poll sequence used here: subscribe TX, set time, request `0x08`, `0x11`, `0x10`, then a logs request for striker events (full or incremental, see above).
+
+Two Mouse Traps (0.3.730) that had been polled for days started answering the TX CCCD write with ATT error `0x11` (Insufficient Resources) and kept doing so after a power cycle; the Goodnature app could not connect to them either. Writes to RX were still acted on (a CLEAR changed the advertisement flags). When the subscription fails the gateway skips every request, still writes a FIRE or CLEAR command, and ends the session.
 
 ## Capturing data from the gateway
 

@@ -181,6 +181,9 @@ class GoodnatureTrap {
   // ---- connection path (active) ------------------------------------------
   // Job requests from buttons. The hub connects on the next advertisement.
   void request_job(Job job);
+  // A button press is the user asking now: skip the retry backoff and give
+  // the action its own attempts before it is dropped.
+  void clear_backoff() { this->consecutive_failures_ = 0; }
   Job pending_job() const { return this->pending_job_; }
   // Next poll replays the whole striker log instead of only what is new.
   void request_full_rescan() { this->full_rescan_requested_ = true; }
@@ -197,6 +200,8 @@ class GoodnatureTrap {
   void apply_a24_characteristic(uint16_t short_id, const uint8_t *data, size_t len);
   void apply_c20_frame(const protocol::C20Frame &frame);
   void on_job_started(Job job);
+  // The trap acknowledged the job's command write (test fire, clear).
+  void on_command_delivered(Job job);
   void on_job_finished(Job job, bool ok, const char *reason);
 
   // Debug capture: the connection hands over a printable summary of each
@@ -304,6 +309,7 @@ class GoodnatureTrap {
   uint8_t adv_flags_raw_{0xFF};
   uint8_t adv_battery_state_raw_{0xFF};
   uint16_t adv_word6_raw_{0xFFFF};  // bytes 6..7; documented as strike count, does not match the app
+  std::optional<bool> adv_alert_bit_;  // flag 0x02 in the last advertisement
 
   // Mouse Trap strike accounting. The trap's striker-event log is the only
   // source that matched the app (1 TRIGGER event = 1 kill), so every poll
@@ -330,6 +336,7 @@ class GoodnatureTrap {
   // Connection bookkeeping
   Job pending_job_{Job::NONE};
   Job active_job_{Job::NONE};
+  bool command_delivered_{false};  // during / after active_job_
   uint32_t last_poll_ms_{0};
   uint32_t last_poll_epoch_{0};
   uint32_t last_attempt_ms_{0};

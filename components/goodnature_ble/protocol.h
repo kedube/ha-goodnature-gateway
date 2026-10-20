@@ -112,9 +112,10 @@ void put_u32_le(std::vector<uint8_t> &out, uint32_t v);
 // [5] flags, [6..7] strike count, [8] battery. On the Mouse Trap (firmware
 // 0.3.730) byte 8 is the battery *state* enumeration (4 = NORMAL), not a
 // percentage: the percentage only comes from the UART battery-level
-// response. Byte 5 read 0x04 on activated, closed, not-charging traps, which
-// does not fit the documented bit layout, so the flag bits below are kept
-// for reference but treated as unverified; `flags` carries the raw byte.
+// response. Byte 5 only partly fits the documented bit layout: 0x02 (kill
+// alert) and 0x10 (charging) agreed with the UART poll, but activated traps
+// send 0x04, never 0x01. The other flag bits below are unverified; `flags`
+// carries the raw byte.
 
 struct C20Advertisement {
   uint32_t serial_number_raw;

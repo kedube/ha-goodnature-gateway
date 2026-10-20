@@ -61,6 +61,10 @@ class GoodnatureConnection : public esp32_ble_client::BLEClientBase {
     uint8_t expect_type{0};
     uint32_t wait_ms{0};
     std::vector<uint8_t> data;
+    // A write that carries out the job's action on its own (test fire, Mouse
+    // Trap clear). Once the trap acknowledges it the action has happened,
+    // whatever follows, so it is never resent.
+    bool command{false};
   };
 
   void dump_gatt_();
@@ -100,6 +104,9 @@ class GoodnatureConnection : public esp32_ble_client::BLEClientBase {
   protocol::C20FrameAssembler assembler_;
   esp32_ble_client::BLECharacteristic *nus_rx_{nullptr};
   esp32_ble_client::BLECharacteristic *nus_tx_{nullptr};
+  // Why the Mouse Trap's UART cannot answer this session (empty = it can).
+  // Requests are then skipped; commands are still written.
+  char uart_error_[48]{};
 };
 
 }  // namespace esphome::goodnature_ble

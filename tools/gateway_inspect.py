@@ -71,10 +71,14 @@ C20_TRAY_STATE = ("OPEN", "CLOSED", "UNKNOWN", "NO_DATA")
 C20_BATTERY_STATE = ("STARTUP", "NOT_CONNECTED", "CRITICAL", "LOW", "NORMAL", "NO_DATA")
 C20_CHARGE_STATE = ("NOT_CHARGING", "CHARGING", "NO_DATA")
 C20_USB_STATE = ("DISCONNECTED", "CONNECTED", "NO_DATA")
-C20_STRIKER_SOURCE = ("TRIGGER", "UNUSED", "USER", "NO_DATA")
+# App 3.6.1 names: SENSOR, UNUSED, APP, BACKDRIVE_TEST, UNKNOWN
+C20_STRIKER_SOURCE = ("TRIGGER", "UNUSED", "USER", "BACKDRIVE_TEST", "NO_DATA")
 C20_ADV_FLAG_BITS = {0x01: "activated?", 0x02: "kill_alert", 0x08: "low_battery?",
                      0x10: "charging", 0x20: "usb?", 0x40: "discoverable?"}
 NORDIC_MFG_RE = re.compile(r"(?:mfg=\[0x0059:|ff5900)([0-9a-fA-F]{18})")
+A24_ADV_FLAG_BITS = {0x01: "strikes_available", 0x02: "activated", 0x04: "moving", 0x08: "low_battery",
+                     0x10: "output_power", 0x20: "new_event", 0x40: "new_error"}
+A24_SERVICES_RE = re.compile(r"services=\[((?:0x[0-9A-Fa-f]{4},?){6})\]")
 
 
 def _enum(values, i: int) -> str:
@@ -83,6 +87,21 @@ def _enum(values, i: int) -> str:
 
 def _u32(b: bytes, o: int) -> int:
     return int.from_bytes(b[o:o + 4], "little")
+
+
+def _i16(b: bytes, o: int) -> int:
+    return int.from_bytes(b[o:o + 2], "little", signed=True)
+
+
+def _f11073(raw: int) -> float:
+    """IEEE 11073 32-bit FLOAT: signed 24-bit mantissa times 10 ** signed 8-bit exponent."""
+    mantissa = raw & 0xFFFFFF
+    if mantissa & 0x800000:
+        mantissa -= 1 << 24
+    exponent = raw >> 24
+    if exponent & 0x80:
+        exponent -= 1 << 8
+    return mantissa * 10.0 ** exponent
 
 
 def decode_c20_adv(payload: bytes) -> str:
@@ -132,18 +151,85 @@ def decode_c20_frame(ftype: int, payload: bytes) -> str | None:
                 f"tray={_enum(C20_TRAY_STATE, p[6])} battery={_enum(C20_BATTERY_STATE, p[7])} "
                 f"charge={_enum(C20_CHARGE_STATE, p[8])} usb={_enum(C20_USB_STATE, p[9])} "
                 f"strike_count={_u32(p, 10)} (device time {_u32(p, 0)})")
+    if ftype == 0x30 and len(p) >= 8:
+        text = f"trigger event: count={_u32(p, 4)} at {_u32(p, 0)}"
+        if len(p) >= 52:
+            def sensor(o: int) -> str:
+                return (f"ambient={_u32(p, o)} on={_u32(p, o + 4)} baseline={_f11073(_u32(p, o + 8)):g} "
+                        f"threshold={_u32(p, o + 12)} on_time={_u32(p, o + 16)}")
+            text += f" inner[{sensor(8)}] outer[{sensor(28)}] alert_time={_u32(p, 48)}"
+        return text
     if ftype == 0x31 and len(p) >= 21:
-        return (f"striker event: count={_u32(p, 4)} source={_enum(C20_STRIKER_SOURCE, p[8])} "
-                f"trigger={_u32(p, 9)} fire_ms={_u32(p, 13)} rewind_ms={_u32(p, 17)} at {_u32(p, 0)}")
+        text = (f"striker event: count={_u32(p, 4)} source={_enum(C20_STRIKER_SOURCE, p[8])} "
+                f"trigger={_u32(p, 9)} fire_us={_u32(p, 13)} rewind_us={_u32(p, 17)} at {_u32(p, 0)}")
+        if len(p) >= 25:
+            text += f" peak_fire_mA={_i16(p, 21)} peak_rewind_mA={_i16(p, 23)}"
+        if len(p) >= 29:
+            text += f" backdrive_us={_u32(p, 25)}"
+        return text
     if ftype == 0x40 and len(p) >= 12:
         return f"logs response: start={_u32(p, 0)} end={_u32(p, 4)} flags/count={_u32(p, 8)}"
     if ftype == 0x04:
         return f"set time ack (device time {_u32(p, 0)})" if len(p) >= 4 else "set time ack"
+    if ftype == 0x12:
+        return "set command ack"
+    if ftype == 0x14 and len(p) >= 40:
+        kills = [t for t in (_u32(p, 4 * i) for i in range(10)) if t]
+        return f"kill history: {len(kills)} kills " + (str(sorted(kills)) if kills else "")
+    if ftype == 0x62 and len(p) >= 8:
+        return (f"input states: battery {_i16(p, 4)} mV, charge pin {p[0]}, usb pin {p[1]}, button {p[2]}, "
+                f"battery error {p[3]}, motor feedback {_i16(p, 6)}")
+    if ftype == 0xF8:
+        return "bootloader " + p.split(b"\0", 1)[0].decode(errors="replace")
     return None
 
 
 FRAME_RE = re.compile(r"^UART ([0-9a-fA-F]{2})/([0-9a-fA-F]{2}):([0-9a-fA-F]*)$")
 A24_READ_RE = re.compile(r"^([0-9A-Fa-f]{4}):([0-9a-fA-F]*)$")
+
+
+def a24_battery(voltage_raw: int, resistance: int) -> str:
+    """The app's reading: raw / 255 * 3.6 V, rated by internal resistance."""
+    rating = "Full" if resistance < 56 else "Medium" if resistance < 200 else "Low" if resistance < 230 else "Critical"
+    return f"battery {voltage_raw / 255 * 3.6:.2f} V, internal resistance {resistance} ({rating})"
+
+
+def decode_a24_adv(uuids: list[int]) -> str | None:
+    """The six 16-bit service UUIDs of an A24 advertisement."""
+    if len(uuids) != 6 or uuids[3] != 0x1234:
+        return None
+    serial = f"{uuids[1]:04X}{uuids[0]:04X}"
+    flags = uuids[2] & 0xFF
+    bits = [name for bit, name in A24_ADV_FLAG_BITS.items() if flags & bit] or ["none"]
+    battery = a24_battery(uuids[4] >> 8, uuids[4] & 0xFF) if uuids[4] >> 8 else "battery not measured"
+    return (f"A24 serial={serial} type={uuids[2] >> 8} flags=0x{flags:02X} [{' '.join(bits)}] {battery}; "
+            f"kills={uuids[5] >> 8} unread={uuids[5] & 0xFF}")
+
+
+def adv_uuid16_list(raw: bytes) -> list[int]:
+    """16-bit service UUIDs (AD types 0x02 / 0x03) in raw advertising data."""
+    out, i = [], 0
+    while i + 1 < len(raw):
+        length = raw[i]
+        if length == 0 or i + 1 + length > len(raw):
+            break
+        if raw[i + 1] in (0x02, 0x03):
+            body = raw[i + 2:i + 1 + length]
+            out += [int.from_bytes(body[j:j + 2], "little") for j in range(0, len(body) - 1, 2)]
+        i += 1 + length
+    return out
+
+
+def decode_a24_read(short_id: int, raw: bytes) -> str | None:
+    if short_id == 0xD30D and len(raw) >= 12:
+        temp = int.from_bytes(raw[5:6], "little", signed=True)
+        return (f"kill record #{int.from_bytes(raw[10:12], 'little')} at {_u32(raw, 6) * 60}, {temp} C, "
+                f"peak level {raw[0]}, trap id {raw[1:5][::-1].hex()}")
+    if short_id == 0xFAD1 and len(raw) == 1:
+        return f"battery {raw[0] / 255 * 3.6:.2f} V"
+    if short_id == 0xFAD2 and len(raw) == 1:
+        return a24_battery(0, raw[0]).split(", ", 1)[1]
+    return None
 
 
 def decode_capture(value: str) -> str | None:
@@ -154,9 +240,19 @@ def decode_capture(value: str) -> str | None:
     m = NORDIC_MFG_RE.search(value)
     if m:
         return decode_c20_adv(bytes.fromhex(m.group(1)))
+    m = A24_SERVICES_RE.search(value)
+    if m:
+        return decode_a24_adv([int(u, 16) for u in m.group(1).split(",")])
+    if re.fullmatch(r"[0-9a-fA-F]+(\|[0-9a-fA-F]*)?", value) and len(value) > 8:
+        # Last Advertisement: adv | scan_rsp hex
+        raw = bytes.fromhex(value.split("|")[0])
+        if (d := decode_a24_adv(adv_uuid16_list(raw))):
+            return d
     m = A24_READ_RE.match(value)
     if m:
         raw = bytes.fromhex(m.group(2))
+        if (d := decode_a24_read(int(m.group(1), 16), raw)):
+            return d
         if len(raw) == 2:
             return f"u16 {int.from_bytes(raw, 'little')}"
         try:

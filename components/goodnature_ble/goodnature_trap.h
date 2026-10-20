@@ -24,6 +24,7 @@
 namespace esphome::goodnature_ble {
 
 class GoodnatureHub;
+class ReplacedDate;
 
 // Kinds of per-slot buttons (TrapButton in entities.h). Declared here so the
 // trap can leave model-specific ones unregistered.
@@ -45,6 +46,9 @@ enum class Job : uint8_t {
   TEST_FIRE,    // A24: DE13=0x05 flow. C20: SetCommand(FIRE)
   RESET_ALERT,  // A24: ack read pointers + DE13=0x02. C20: SetCommand(CLEAR)
 };
+
+// "poll", "test fire", ... for logs and status text.
+const char *job_label(Job job);
 
 // Persisted per slot so a trap keeps its device, counters and consumable
 // timers across gateway reboots. Kept trivially copyable for NVS.
@@ -74,6 +78,7 @@ struct TrapCache {
   uint32_t log_scanned_to;  // C20: striker log counted up to this epoch (0 = never)
   uint32_t last_full_scan;  // C20: epoch of the last replay of the whole log
   uint32_t test_fires;      // C20: USER striker events seen in the whole log
+  uint32_t kill_history_newest;  // C20: newest KillHistory time already counted (0 = none seen)
 } __attribute__((packed));
 
 struct TrapIdentity {
@@ -82,7 +87,7 @@ struct TrapIdentity {
   char firmware[24];
 } __attribute__((packed));
 
-static constexpr uint8_t CACHE_VERSION = 1;
+static constexpr uint8_t CACHE_VERSION = 2;
 static constexpr uint8_t CACHE_ACTIVE_KNOWN = 0x01;
 static constexpr uint8_t CACHE_ACTIVE = 0x02;
 static constexpr uint8_t CACHE_CHARGING_KNOWN = 0x04;
@@ -130,13 +135,23 @@ class GoodnatureTrap {
   // ---- entity wiring (called from generated code) ------------------------
   void set_strikes_sensor(sensor::Sensor *s) { this->strikes_sensor_ = s; }
   void set_battery_sensor(sensor::Sensor *s) { this->battery_sensor_ = s; }
-  void set_battery_voltage_sensor(sensor::Sensor *s) { this->battery_voltage_sensor_ = s; }
+  void set_battery_volts_sensor(sensor::Sensor *s) { this->battery_volts_sensor_ = s; }
+  void set_battery_resistance_sensor(sensor::Sensor *s) { this->battery_resistance_sensor_ = s; }
+  void set_strike_temperature_sensor(sensor::Sensor *s) { this->strike_temperature_sensor_ = s; }
   void set_rssi_sensor(sensor::Sensor *s) { this->rssi_sensor_ = s; }
   void set_last_seen_sensor(sensor::Sensor *s) { this->last_seen_sensor_ = s; }
   void set_last_strike_sensor(sensor::Sensor *s) { this->last_strike_sensor_ = s; }
   void set_lure_age_sensor(sensor::Sensor *s) { this->lure_age_sensor_ = s; }
   void set_lure_remaining_sensor(sensor::Sensor *s) { this->lure_remaining_sensor_ = s; }
   void set_co2_remaining_sensor(sensor::Sensor *s) { this->co2_remaining_sensor_ = s; }
+  void set_peak_fire_current_sensor(sensor::Sensor *s) { this->peak_fire_sensor_ = s; }
+  void set_peak_rewind_current_sensor(sensor::Sensor *s) { this->peak_rewind_sensor_ = s; }
+  void set_inner_reading_sensor(sensor::Sensor *s) { this->trigger_sensors_[INNER_READING] = s; }
+  void set_inner_ambient_sensor(sensor::Sensor *s) { this->trigger_sensors_[INNER_AMBIENT] = s; }
+  void set_inner_threshold_sensor(sensor::Sensor *s) { this->trigger_sensors_[INNER_THRESHOLD] = s; }
+  void set_outer_reading_sensor(sensor::Sensor *s) { this->trigger_sensors_[OUTER_READING] = s; }
+  void set_outer_ambient_sensor(sensor::Sensor *s) { this->trigger_sensors_[OUTER_AMBIENT] = s; }
+  void set_outer_threshold_sensor(sensor::Sensor *s) { this->trigger_sensors_[OUTER_THRESHOLD] = s; }
 
   void set_kill_alert_binary_sensor(binary_sensor::BinarySensor *s) { this->kill_alert_bs_ = s; }
   void set_battery_low_binary_sensor(binary_sensor::BinarySensor *s) { this->battery_low_bs_ = s; }
@@ -145,15 +160,22 @@ class GoodnatureTrap {
   void set_lure_due_binary_sensor(binary_sensor::BinarySensor *s) { this->lure_due_bs_ = s; }
   void set_co2_low_binary_sensor(binary_sensor::BinarySensor *s) { this->co2_low_bs_ = s; }
   void set_online_binary_sensor(binary_sensor::BinarySensor *s) { this->online_bs_ = s; }
+  void set_battery_recovery_binary_sensor(binary_sensor::BinarySensor *s) { this->battery_recovery_bs_ = s; }
+  void set_error_binary_sensor(binary_sensor::BinarySensor *s) { this->error_bs_ = s; }
 
   void set_model_text_sensor(text_sensor::TextSensor *s) { this->model_ts_ = s; }
   void set_battery_status_text_sensor(text_sensor::TextSensor *s) { this->battery_status_ts_ = s; }
   void set_serial_text_sensor(text_sensor::TextSensor *s) { this->serial_ts_ = s; }
   void set_firmware_text_sensor(text_sensor::TextSensor *s) { this->firmware_ts_ = s; }
+  void set_bootloader_text_sensor(text_sensor::TextSensor *s) { this->bootloader_ts_ = s; }
   void set_mac_text_sensor(text_sensor::TextSensor *s) { this->mac_ts_ = s; }
   void set_status_text_sensor(text_sensor::TextSensor *s) { this->status_ts_ = s; }
   void set_last_advertisement_text_sensor(text_sensor::TextSensor *s) { this->last_adv_ts_ = s; }
   void set_last_frame_text_sensor(text_sensor::TextSensor *s) { this->last_frame_ts_ = s; }
+  void set_error_data_text_sensor(text_sensor::TextSensor *s) { this->error_data_ts_ = s; }
+  void set_trap_state_text_sensor(text_sensor::TextSensor *s) { this->trap_state_ts_ = s; }
+  void set_lure_date(ReplacedDate *d) { this->lure_date_ = d; }
+  void set_co2_date(ReplacedDate *d) { this->co2_date_ = d; }
 
   void set_lure_life_number(number::Number *n) { this->lure_life_number_ = n; }
   void set_strike_event(event::Event *e) { this->strike_event_ = e; }
@@ -184,14 +206,34 @@ class GoodnatureTrap {
   // A button press is the user asking now: skip the retry backoff and give
   // the action its own attempts before it is dropped.
   void clear_backoff() { this->consecutive_failures_ = 0; }
+  // Clear Kill Alert. Mouse Trap: SetCommand(CLEAR). A24: the alert is the
+  // gateway's own (the trap is acknowledged in every session, like the app
+  // does), so this only clears it, at once and without the trap.
+  void clear_kill_alert();
+  // Why a test fire must not be sent now (the app's conditions for a Mouse
+  // Trap: state known, no error, off USB, no kill waiting, tray closed), or
+  // nullptr when it may.
+  const char *test_fire_blocked() const;
+  // Test Fire button: queues the job, or reports in Status why not.
+  void request_test_fire();
   Job pending_job() const { return this->pending_job_; }
   // Next poll replays the whole striker log instead of only what is new.
   void request_full_rescan() { this->full_rescan_requested_ = true; }
-  // Start of the striker-log window for a poll ending at now_epoch, and
-  // whether that window is a full replay. Called by the connection when it
-  // builds the logs request; the answer is applied in apply_history_().
-  uint32_t log_window_start(uint32_t now_epoch);
+  // Mouse Trap firmware after 0.2.550 keeps its last ten kill times
+  // (KillHistory), which is what the app counts; older firmware is counted
+  // from the striker log. Unknown firmware is assumed to be current.
+  bool uses_kill_history() const;
+  // Called by the connection when it reaches the logs request, after this
+  // session's KillHistory has arrived: whether to ask for the log, and the
+  // window start and flags. A KillHistory trap replays the whole log only
+  // for the lifetime total (when unknown, and on Poll Now), and otherwise
+  // asks only around new kills, for their striker and trigger details.
+  bool plan_striker_log(uint32_t now_epoch, uint32_t &start, uint32_t &flags);
   void clear_pending_job() { this->pending_job_ = Job::NONE; }
+  // An optional request (one older firmware may ignore) went unanswered;
+  // it is not sent to this trap again until its firmware changes.
+  void on_optional_unanswered(uint8_t type);
+  bool skips_optional(uint8_t type) const;
 
   // True when the hub should connect to this trap next time it is heard.
   bool wants_connection(uint32_t now_ms) const;
@@ -217,6 +259,9 @@ class GoodnatureTrap {
   // ---- consumables ----------------------------------------------------------
   void mark_lure_replaced();
   void mark_co2_replaced();
+  // From the Replaced On date pickers; epoch seconds.
+  void set_lure_replaced(uint32_t epoch);
+  void set_co2_replaced(uint32_t epoch);
   void mark_co2_shot_used();
   void set_lure_life_days(uint16_t days);
   uint16_t lure_life_days() const;
@@ -248,6 +293,28 @@ class GoodnatureTrap {
   void publish_last_seen_();
   void note_strike_epoch_(uint32_t epoch);
   void apply_history_();  // Mouse Trap: turn the replayed log into Strikes / Last Strike
+  // Mouse Trap: count KillHistory entries newer than any seen before. After
+  // a full log replay the entries are already in the count.
+  void apply_kill_history_(bool replayed);
+  // Start of the striker-log window for a poll ending at now_epoch, and
+  // whether that window is a full replay (hist_full_).
+  uint32_t log_window_start_(uint32_t now_epoch);
+  // Mouse Trap: keep the newest striker / trigger event seen this session
+  // for the motor-current and sensor-reading entities.
+  void note_striker_details_(const protocol::C20StrikerEvent &e);
+  void note_trigger_details_(const protocol::C20TriggerEvent &t);
+  void publish_details_();
+  void apply_a24_error_counter_(uint16_t short_id, const uint8_t *data, size_t len);
+  void apply_a24_advertisement_(const protocol::A24Advertisement &adv);
+  // A24: turn Kill Alert on until Clear Kill Alert.
+  void raise_kill_alert_(const char *why);
+  // Mouse Trap status the way the app ranks it: "Error", "Charging",
+  // "Charged", "New strike", "Tray open" or "Set"; nullptr before a poll.
+  const char *c20_trap_state_() const;
+  std::optional<bool> battery_low_now_() const;
+  std::string battery_status_text_() const;
+  void publish_dates_();
+  void publish_error_();
 
   template<typename T> static void publish_if_changed(T *entity, std::optional<bool> &cache, bool value) {
     if (entity == nullptr)
@@ -297,10 +364,18 @@ class GoodnatureTrap {
   std::optional<uint16_t> kill_read_;
   std::optional<bool> kill_alert_;
   std::optional<bool> active_;
-  std::optional<bool> battery_low_;
+  std::optional<bool> adv_low_battery_;  // the advertisement's low-battery bit (both models)
   std::optional<bool> charging_;
+  std::optional<bool> usb_connected_;  // C20, from the device state
   std::optional<uint8_t> battery_percent_;
-  std::optional<uint16_t> battery_voltage_raw_;
+  std::optional<uint16_t> battery_voltage_raw_;  // A24: FAD1 or the advertisement
+  std::optional<uint8_t> battery_resistance_;    // A24: FAD2 or the advertisement
+  std::optional<int8_t> strike_temperature_;     // A24: from the newest kill record
+  std::optional<bool> error_flag_;               // A24: the advertisement's new-error bit
+  std::optional<protocol::C20DeviceState> device_state_;  // C20
+  std::optional<bool> tray_open_;                         // C20
+  std::optional<int16_t> battery_mv_;  // C20, from InputStates
+  std::string bootloader_;             // C20, re-read every poll
   bool have_device_counter_{false};
   bool have_adv_counter_{false};  // C20: the advertisement carries the total strike count
   bool gatt_dumped_{false};
@@ -311,18 +386,32 @@ class GoodnatureTrap {
   uint16_t adv_word6_raw_{0xFFFF};  // bytes 6..7; documented as strike count, does not match the app
   std::optional<bool> adv_alert_bit_;  // flag 0x02 in the last advertisement
 
-  // Mouse Trap strike accounting. The trap's striker-event log is the only
-  // source that matched the app (1 TRIGGER event = 1 kill), so every poll
-  // replays the whole log and these accumulate during the job.
+  // Mouse Trap striker-log replay (1 TRIGGER event = 1 kill, matching the
+  // app). Used for the lifetime total and on older firmware; these
+  // accumulate during the job.
   uint32_t hist_trigger_count_{0};
   uint32_t hist_user_count_{0};
   uint32_t hist_last_trigger_epoch_{0};
   bool hist_complete_{false};      // the LogsResponse terminator arrived
   bool replaying_history_{false};  // decoding a nested log event, not a live one
   bool hist_full_{false};          // this replay covers the whole log, not just new events
+  bool hist_requested_{false};     // this session asked for the log at all
   uint32_t hist_window_end_{0};    // epoch the current log window ends at
   bool full_rescan_requested_{false};
   uint32_t last_adv_change_poll_ms_{0};
+  protocol::C20KillHistory kill_history_{};  // from the current session
+  bool kill_history_received_{false};
+  bool hist_details_only_{false};  // this window is for new kills' details; KillHistory does the counting
+  std::vector<uint8_t> unanswered_types_;  // optional C20 requests this firmware ignored
+
+  // Newest striker and trigger events seen since boot (Mouse Trap)
+  std::optional<protocol::C20StrikerEvent> last_striker_;
+  std::optional<protocol::C20TriggerEvent> last_trigger_;
+
+  // A24 error channel (E771 / E773 counters, E772 record)
+  std::optional<uint16_t> error_displayed_;
+  std::optional<uint16_t> error_read_;
+  std::string error_data_;
 
   // A24 passive burst inference (used until the trap counter is read)
   uint32_t burst_started_ms_{0};
@@ -345,21 +434,39 @@ class GoodnatureTrap {
 
   // Published-state caches (to avoid re-sending unchanged binary/text state)
   std::optional<bool> kill_alert_pub_, battery_low_pub_, charging_pub_, active_pub_, lure_due_pub_, co2_low_pub_,
-      online_pub_;
-  std::optional<std::string> model_pub_, battery_status_pub_, serial_pub_, firmware_pub_, mac_pub_, status_pub_;
+      online_pub_, battery_recovery_pub_, error_pub_;
+  std::optional<std::string> model_pub_, battery_status_pub_, serial_pub_, firmware_pub_, bootloader_pub_, mac_pub_,
+      status_pub_, error_data_pub_, trap_state_pub_;
   std::optional<float> strikes_pub_, battery_pub_, co2_pub_, lure_age_pub_, lure_remaining_pub_, last_strike_pub_,
-      last_seen_pub_, voltage_pub_;
+      last_seen_pub_, volts_pub_, resistance_pub_, temperature_pub_, peak_fire_pub_, peak_rewind_pub_;
+
+  // Latest trigger-event readings (Mouse Trap)
+  enum TriggerReading : uint8_t {
+    INNER_READING,
+    INNER_AMBIENT,
+    INNER_THRESHOLD,
+    OUTER_READING,
+    OUTER_AMBIENT,
+    OUTER_THRESHOLD,
+    TRIGGER_READINGS,
+  };
+  sensor::Sensor *trigger_sensors_[TRIGGER_READINGS]{};
+  std::optional<float> trigger_pub_[TRIGGER_READINGS];
 
   // Entities -----------------------------------------------------------------
   sensor::Sensor *strikes_sensor_{nullptr};
   sensor::Sensor *battery_sensor_{nullptr};
-  sensor::Sensor *battery_voltage_sensor_{nullptr};
+  sensor::Sensor *battery_volts_sensor_{nullptr};
+  sensor::Sensor *battery_resistance_sensor_{nullptr};
+  sensor::Sensor *strike_temperature_sensor_{nullptr};
   sensor::Sensor *rssi_sensor_{nullptr};
   sensor::Sensor *last_seen_sensor_{nullptr};
   sensor::Sensor *last_strike_sensor_{nullptr};
   sensor::Sensor *lure_age_sensor_{nullptr};
   sensor::Sensor *lure_remaining_sensor_{nullptr};
   sensor::Sensor *co2_remaining_sensor_{nullptr};
+  sensor::Sensor *peak_fire_sensor_{nullptr};
+  sensor::Sensor *peak_rewind_sensor_{nullptr};
   binary_sensor::BinarySensor *kill_alert_bs_{nullptr};
   binary_sensor::BinarySensor *battery_low_bs_{nullptr};
   binary_sensor::BinarySensor *charging_bs_{nullptr};
@@ -367,14 +474,21 @@ class GoodnatureTrap {
   binary_sensor::BinarySensor *lure_due_bs_{nullptr};
   binary_sensor::BinarySensor *co2_low_bs_{nullptr};
   binary_sensor::BinarySensor *online_bs_{nullptr};
+  binary_sensor::BinarySensor *battery_recovery_bs_{nullptr};
+  binary_sensor::BinarySensor *error_bs_{nullptr};
   text_sensor::TextSensor *model_ts_{nullptr};
   text_sensor::TextSensor *battery_status_ts_{nullptr};
   text_sensor::TextSensor *serial_ts_{nullptr};
   text_sensor::TextSensor *firmware_ts_{nullptr};
+  text_sensor::TextSensor *bootloader_ts_{nullptr};
   text_sensor::TextSensor *mac_ts_{nullptr};
   text_sensor::TextSensor *status_ts_{nullptr};
   text_sensor::TextSensor *last_adv_ts_{nullptr};
   text_sensor::TextSensor *last_frame_ts_{nullptr};
+  text_sensor::TextSensor *error_data_ts_{nullptr};
+  text_sensor::TextSensor *trap_state_ts_{nullptr};
+  ReplacedDate *lure_date_{nullptr};
+  ReplacedDate *co2_date_{nullptr};
   number::Number *lure_life_number_{nullptr};
   event::Event *strike_event_{nullptr};
 };

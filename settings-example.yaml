@@ -64,14 +64,15 @@ substitutions:
   write_time_on_connect: "true"          # sync the trap clock like the app does
 
   # Consumables ------------------------------------------------------------
-  lure_life_days: "180"                  # donut life; per-trap "Lure Life" number overrides
+  lure_life_days: "180"                  # A24 paste life (Mouse Trap donut: 90); per-trap "Lure Life" overrides
   co2_capacity: "24"                     # shots per CO2 canister (A24)
   co2_low_threshold: "4"                 # "CO2 Low" at or below this many shots
 
   # Behaviour --------------------------------------------------------------
-  # Clear the kill alert on the trap automatically after the gateway has
-  # reported it (A24: acknowledge kill/event pointers; C20: CLEAR command).
-  # Leave off if you want the alert to stay until you press Clear Kill Alert.
+  # Mouse Trap: send CLEAR automatically after the gateway has reported a
+  # kill. Leave off if you want the alert to stay until you press Clear Kill
+  # Alert. (A24s are acknowledged on the trap every session either way, and
+  # their Kill Alert stays on in Home Assistant until you clear it.)
   auto_acknowledge: "false"
 
   # A24 battery ------------------------------------------------------------

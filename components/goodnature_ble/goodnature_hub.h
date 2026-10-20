@@ -45,7 +45,9 @@ class GoodnatureHub : public Component, public esp32_ble_tracker::ESPBTDeviceLis
 #endif
   void set_poll_interval(uint32_t ms) { this->poll_interval_ms_ = ms; }
   void set_lure_life_days(uint16_t days) { this->lure_life_days_ = days; }
+  void set_mouse_trap_lure_life_days(uint16_t days) { this->mouse_trap_lure_life_days_ = days; }
   void set_co2_capacity(uint16_t shots) { this->co2_capacity_ = shots; }
+  void set_co2_leak_days(uint16_t days) { this->co2_leak_days_ = days; }
   void set_co2_low_threshold(uint16_t shots) { this->co2_low_threshold_ = shots; }
   void set_offline_timeout_c20(uint32_t ms) { this->offline_timeout_c20_ms_ = ms; }
   void set_write_time_on_connect(bool v) { this->write_time_on_connect_ = v; }
@@ -72,8 +74,13 @@ class GoodnatureHub : public Component, public esp32_ble_tracker::ESPBTDeviceLis
 
   // ---- runtime API used by traps, buttons, connection -----------------------------
   uint32_t poll_interval_ms() const { return this->poll_interval_ms_; }
-  uint16_t default_lure_life_days() const { return this->lure_life_days_; }
+  // The app's lure lives: 180 days of A24 paste, 90 of Mouse Trap donut.
+  uint16_t default_lure_life_days(protocol::Model model) const {
+    return model == protocol::Model::C20 ? this->mouse_trap_lure_life_days_ : this->lure_life_days_;
+  }
   uint16_t co2_capacity() const { return this->co2_capacity_; }
+  // The app counts one shot lost every this many days a canister is in (0 = off).
+  uint16_t co2_leak_days() const { return this->co2_leak_days_; }
   uint16_t co2_low_threshold() const { return this->co2_low_threshold_; }
   // Only the Mouse Trap times out; an A24 stays online once it has checked in.
   uint32_t offline_timeout_c20_ms() const { return this->offline_timeout_c20_ms_; }
@@ -144,7 +151,9 @@ class GoodnatureHub : public Component, public esp32_ble_tracker::ESPBTDeviceLis
 
   uint32_t poll_interval_ms_{15 * 60 * 1000};
   uint16_t lure_life_days_{180};
+  uint16_t mouse_trap_lure_life_days_{90};
   uint16_t co2_capacity_{24};
+  uint16_t co2_leak_days_{21};
   uint16_t co2_low_threshold_{4};
   uint32_t offline_timeout_c20_ms_{15UL * 60 * 1000};
   bool write_time_on_connect_{true};

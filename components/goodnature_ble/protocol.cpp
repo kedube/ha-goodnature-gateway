@@ -1,5 +1,6 @@
 #include "protocol.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -199,10 +200,48 @@ std::optional<A24Strike> parse_d30d(const uint8_t *data, size_t len) {
   if (nbytes < 12)
     return std::nullopt;
   A24Strike strike{};
-  strike.flags = bytes[5];
+  strike.peak_level = bytes[0];
+  strike.temperature = static_cast<int8_t>(bytes[5]);
   strike.minutes_since_epoch = *parse_u32_le(bytes, nbytes, 6);
   strike.strike_id = *parse_u16_le(bytes + 10, 2);
   return strike;
+}
+
+std::optional<A24Advertisement> parse_a24_advertisement(const uint16_t *uuids, size_t count) {
+  if (uuids == nullptr || count != 6 || uuids[3] != SVC16_LEGACY_1234)
+    return std::nullopt;
+  A24Advertisement adv{};
+  adv.flags = uuids[2] & 0xFF;
+  adv.device_type = uuids[2] >> 8;
+  adv.voltage_raw = uuids[4] >> 8;
+  adv.internal_resistance = uuids[4] & 0xFF;
+  adv.kills = uuids[5] >> 8;
+  adv.unread_kills = uuids[5] & 0xFF;
+  return adv;
+}
+
+float a24_battery_volts(uint8_t raw) { return raw / 255.0f * 3.6f; }
+
+A24BatteryHealth a24_battery_health(uint8_t internal_resistance) {
+  // The app's thresholds; a higher reading is a more worn battery.
+  if (internal_resistance < 56)
+    return A24BatteryHealth::FULL;
+  if (internal_resistance < 200)
+    return A24BatteryHealth::MEDIUM;
+  return internal_resistance < 230 ? A24BatteryHealth::LOW : A24BatteryHealth::CRITICAL;
+}
+
+const char *a24_battery_health_str(A24BatteryHealth health) {
+  switch (health) {
+    case A24BatteryHealth::FULL:
+      return "Full";
+    case A24BatteryHealth::MEDIUM:
+      return "Medium";
+    case A24BatteryHealth::LOW:
+      return "Low";
+    default:
+      return "Critical";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +414,8 @@ const char *c20_striker_source_str(C20StrikerSource v) {
       return "UNUSED";
     case C20StrikerSource::USER:
       return "USER";
+    case C20StrikerSource::BACKDRIVE_TEST:
+      return "BACKDRIVE_TEST";
     default:
       return "NO_DATA";
   }
@@ -414,9 +455,43 @@ std::optional<C20StrikerEvent> parse_c20_striker_event(const uint8_t *data, size
   e.trigger_number = *parse_u32_le(data, len, 9);
   e.fire_time_ms = *parse_u32_le(data, len, 13);
   e.rewind_time_ms = *parse_u32_le(data, len, 17);
+  if (len >= 25) {
+    e.peak_fire_ma = static_cast<int16_t>(*parse_u16_le(data + 21, 2));
+    e.peak_rewind_ma = static_cast<int16_t>(*parse_u16_le(data + 23, 2));
+  }
   if (len >= 29)
     e.backdrive_time_ms = *parse_u32_le(data, len, 25);
   return e;
+}
+
+float decode_ieee11073_float(uint32_t raw) {
+  // Sign-extend the 24-bit mantissa and the 8-bit exponent.
+  int32_t mantissa = static_cast<int32_t>(raw << 8) >> 8;
+  int8_t exponent = static_cast<int8_t>(raw >> 24);
+  return static_cast<float>(mantissa * std::pow(10.0, exponent));
+}
+
+std::optional<C20TriggerEvent> parse_c20_trigger_event(const uint8_t *data, size_t len) {
+  if (data == nullptr || len < 8)
+    return std::nullopt;
+  C20TriggerEvent t{};
+  t.event_time = *parse_u32_le(data, len, 0);
+  t.count = *parse_u32_le(data, len, 4);
+  if (len >= 52) {
+    auto sensor = [&](size_t offset) {
+      C20TriggerSensor s{};
+      s.ambient = *parse_u32_le(data, len, offset);
+      s.on_reading = *parse_u32_le(data, len, offset + 4);
+      s.baseline = decode_ieee11073_float(*parse_u32_le(data, len, offset + 8));
+      s.threshold = *parse_u32_le(data, len, offset + 12);
+      s.on_time = *parse_u32_le(data, len, offset + 16);
+      return s;
+    };
+    t.inner = sensor(8);
+    t.outer = sensor(28);
+    t.alert_time = *parse_u32_le(data, len, 48);
+  }
+  return t;
 }
 
 std::string parse_c20_firmware(const uint8_t *data, size_t len) {
@@ -426,6 +501,58 @@ std::string parse_c20_firmware(const uint8_t *data, size_t len) {
   while (n < len && data[n] != 0)
     n++;
   return decode_text(data, n);
+}
+
+std::optional<C20KillHistory> parse_c20_kill_history(const uint8_t *data, size_t len) {
+  if (data == nullptr || len < 4 * C20_KILL_HISTORY_SIZE)
+    return std::nullopt;
+  C20KillHistory history{};
+  for (size_t i = 0; i < history.size(); i++)
+    history[i] = *parse_u32_le(data, len, 4 * i);
+  return history;
+}
+
+std::optional<C20InputStates> parse_c20_input_states(const uint8_t *data, size_t len) {
+  if (data == nullptr || len < 8)
+    return std::nullopt;
+  C20InputStates s{};
+  s.charge_pin = data[0];
+  s.usb_pin = data[1];
+  s.button_pin = data[2];
+  s.battery_error_pin = data[3];
+  s.battery_mv = static_cast<int16_t>(*parse_u16_le(data + 4, 2));
+  s.motor_feedback = static_cast<int16_t>(*parse_u16_le(data + 6, 2));
+  return s;
+}
+
+static std::optional<std::vector<uint32_t>> parse_version(const std::string &s) {
+  std::vector<uint32_t> parts;
+  size_t i = !s.empty() && (s[0] == 'v' || s[0] == 'V') ? 1 : 0;
+  while (true) {
+    if (i >= s.size() || s[i] < '0' || s[i] > '9')
+      return std::nullopt;
+    uint32_t value = 0;
+    for (; i < s.size() && s[i] >= '0' && s[i] <= '9'; i++)
+      value = value * 10 + (s[i] - '0');
+    parts.push_back(value);
+    if (i == s.size())
+      return parts;
+    if (s[i] != '.')
+      return std::nullopt;
+    i++;
+  }
+}
+
+std::optional<int> compare_versions(const std::string &a, const std::string &b) {
+  auto pa = parse_version(a), pb = parse_version(b);
+  if (!pa.has_value() || !pb.has_value())
+    return std::nullopt;
+  for (size_t i = 0; i < pa->size() || i < pb->size(); i++) {
+    uint32_t x = i < pa->size() ? (*pa)[i] : 0, y = i < pb->size() ? (*pb)[i] : 0;
+    if (x != y)
+      return x < y ? -1 : 1;
+  }
+  return 0;
 }
 
 // ---------------------------------------------------------------------------

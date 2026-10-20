@@ -27,19 +27,6 @@ static const uint32_t C20_LOGS_TIMEOUT_MS = 25000;
 static const uint32_t JOB_TIMEOUT_MS = 45000;
 static const uint32_t JOB_HARD_TIMEOUT_MS = JOB_TIMEOUT_MS + 20000;
 
-static const char *job_name(Job job) {
-  switch (job) {
-    case Job::POLL:
-      return "poll";
-    case Job::TEST_FIRE:
-      return "test fire";
-    case Job::RESET_ALERT:
-      return "reset alert";
-    default:
-      return "none";
-  }
-}
-
 void GoodnatureConnection::setup() {
   BLEClientBase::setup();
   // We never want the base class to connect on its own from an
@@ -62,13 +49,13 @@ void GoodnatureConnection::gap_event_handler(esp_gap_ble_cb_event_t event, esp_b
 
 void GoodnatureConnection::start(GoodnatureTrap *trap, Job job) {
   if (this->trap_ != nullptr) {
-    ESP_LOGW(TAG, "Busy with %s, cannot start %s for %s", this->trap_->address_str(), job_name(job),
+    ESP_LOGW(TAG, "Busy with %s, cannot start %s for %s", this->trap_->address_str(), job_label(job),
              trap->address_str());
     return;
   }
   if (this->state() != espbt::ClientState::IDLE) {
     ESP_LOGW(TAG, "Connection not idle (%s), cannot start %s", espbt::client_state_to_string(this->state()),
-             job_name(job));
+             job_label(job));
     return;
   }
   this->trap_ = trap;
@@ -90,7 +77,7 @@ void GoodnatureConnection::start(GoodnatureTrap *trap, Job job) {
   this->set_address(trap->address());
   this->set_remote_addr_type(trap->address_type());
   trap->on_job_started(job);
-  ESP_LOGI(TAG, "[%s] starting %s (%s)", this->address_str(), job_name(job), model_name(trap->model()));
+  ESP_LOGI(TAG, "[%s] starting %s (%s)", this->address_str(), job_label(job), model_name(trap->model()));
   // The tracker promotes DISCOVERED clients: it stops scanning and calls connect().
   this->set_state(espbt::ClientState::DISCOVERED);
 }
@@ -110,9 +97,13 @@ void GoodnatureConnection::tick(uint32_t now_ms) {
       timeout = op.wait_ms + 2000;
     if (now_ms - this->op_started_ms_ > timeout) {
       if (op.kind == OpKind::C20_LOGS) {
-        // History is best effort: the poll still succeeds, but the strike
-        // count is left untouched because the log was not read to the end.
-        ESP_LOGW(TAG, "[%s] trap log did not finish streaming; strike count unchanged", this->address_str());
+        // History is best effort: the poll still succeeds, but the log is
+        // not used for the strike count because it was not read to the end.
+        ESP_LOGW(TAG, "[%s] trap log did not finish streaming; strike count not resynced", this->address_str());
+      } else if (op.optional) {
+        ESP_LOGD(TAG, "[%s] no answer to optional request %u, continuing", this->address_str(),
+                 (unsigned) this->op_index_);
+        this->trap_->on_optional_unanswered(op.expect_type);
       } else {
         ESP_LOGW(TAG, "[%s] operation %u (kind %u) timed out", this->address_str(), (unsigned) this->op_index_,
                  (unsigned) op.kind);
@@ -180,7 +171,7 @@ void GoodnatureConnection::finish_(bool ok, const char *reason) {
   this->generation_++;
   if (this->state() == espbt::ClientState::IDLE)
     this->set_address(0);
-  ESP_LOGI(TAG, "[%s] %s %s (%s)", trap->address_str(), job_name(job), ok ? "finished" : "failed", reason);
+  ESP_LOGI(TAG, "[%s] %s %s (%s)", trap->address_str(), job_label(job), ok ? "finished" : "failed", reason);
   trap->on_job_finished(job, ok, reason);
   if (this->hub_ != nullptr)
     this->hub_->on_job_finished(trap, job, ok);
@@ -372,6 +363,14 @@ void GoodnatureConnection::build_ops_() {
 
   if (model == Model::C20) {
     this->ops_.push_back(Op{OpKind::NOTIFY_ON});
+    // The app (3.6.1) opens every session with WAKE.
+    if (!this->trap_->skips_optional(C20_TYPE_SET_COMMAND)) {
+      Op wake{OpKind::C20_REQUEST};
+      wake.expect_type = C20_TYPE_SET_COMMAND;
+      wake.data = c20_build_set_command(C20_COMMAND_WAKE);
+      wake.optional = true;
+      this->ops_.push_back(std::move(wake));
+    }
     if (this->job_ == Job::TEST_FIRE || this->job_ == Job::RESET_ALERT) {
       Op cmd{OpKind::C20_REQUEST};
       cmd.expect_type = C20_TYPE_SET_COMMAND;
@@ -411,32 +410,41 @@ void GoodnatureConnection::build_ops_() {
     sel.src_uuid = CHR_KILL_DISPLAYED;
     this->ops_.push_back(std::move(sel));
     this->ops_.push_back(Op{OpKind::READ, CHR_KILL_PAYLOAD});
-  } else if (this->job_ == Job::RESET_ALERT) {
-    this->ops_.push_back(Op{OpKind::READ, CHR_KILL_DISPLAYED});
-    this->ops_.push_back(Op{OpKind::READ, CHR_EVENT_DISPLAYED});
-    Op ack_kill{OpKind::WRITE_ECHO_U16};
-    ack_kill.gn_uuid = CHR_KILL_READ;
-    ack_kill.src_uuid = CHR_KILL_DISPLAYED;
-    this->ops_.push_back(std::move(ack_kill));
-    Op ack_event{OpKind::WRITE_ECHO_U16};
-    ack_event.gn_uuid = CHR_EVENT_READ;
-    ack_event.src_uuid = CHR_EVENT_DISPLAYED;
-    this->ops_.push_back(std::move(ack_event));
-    // Not marked as a command: the clear also needs the two acknowledgements
-    // above, so a session that fails is retried in full.
-    Op ctl{OpKind::WRITE};
-    ctl.gn_uuid = CHR_CONTROL;
-    ctl.data = {A24_CONTROL_ACK};
-    this->ops_.push_back(std::move(ctl));
   }
   this->push_a24_poll_ops_();
 }
 
 void GoodnatureConnection::push_a24_poll_ops_() {
-  for (uint16_t id : {CHR_SERIAL, CHR_FIRMWARE, CHR_KILL_DISPLAYED, CHR_BATTERY_VOLTAGE, CHR_KILL_READ,
-                      CHR_KILL_PAYLOAD, CHR_DEVICE_STATE, CHR_BATTERY_RESISTANCE}) {
+  // CHR_KILL_DISPLAYED is also a cursor: writing a record number to it
+  // selects what CHR_KILL_PAYLOAD returns. Point it at the newest record,
+  // as the app does, rather than wherever the last session left it.
+  auto select_newest = [this]() {
+    Op sel{OpKind::WRITE_ECHO_U16};
+    sel.gn_uuid = CHR_KILL_DISPLAYED;
+    sel.src_uuid = CHR_KILL_DISPLAYED;
+    sel.skip_zero = true;  // no kills, no record
+    this->ops_.push_back(std::move(sel));
+  };
+  for (uint16_t id : {CHR_SERIAL, CHR_FIRMWARE, CHR_KILL_DISPLAYED})
+    this->ops_.push_back(Op{OpKind::READ, id});
+  select_newest();
+  for (uint16_t id : {CHR_KILL_PAYLOAD, CHR_KILL_READ, CHR_BATTERY_VOLTAGE, CHR_BATTERY_RESISTANCE, CHR_DEVICE_STATE,
+                      CHR_ERROR_DISPLAYED, CHR_ERROR_READ, CHR_ERROR_PAYLOAD}) {
     this->ops_.push_back(Op{OpKind::READ, id});
   }
+  // Acknowledge, like the app at the end of every sync: the kills read so
+  // far, then 0x02 (after which the app disconnects). An A24 with kills
+  // nobody acknowledged keeps waking to report them; Kill Alert is kept by
+  // the gateway itself until Clear Kill Alert.
+  Op ack_kill{OpKind::WRITE_ECHO_U16};
+  ack_kill.gn_uuid = CHR_KILL_READ;
+  ack_kill.src_uuid = CHR_KILL_DISPLAYED;
+  ack_kill.skip_zero = true;
+  this->ops_.push_back(std::move(ack_kill));
+  Op ctl{OpKind::WRITE};
+  ctl.gn_uuid = CHR_CONTROL;
+  ctl.data = {A24_CONTROL_ACK};
+  this->ops_.push_back(std::move(ctl));
 }
 
 void GoodnatureConnection::push_c20_poll_ops_() {
@@ -447,22 +455,28 @@ void GoodnatureConnection::push_c20_poll_ops_() {
     t.data = c20_build_set_time(now);
     this->ops_.push_back(std::move(t));
   }
-  for (uint8_t type : {C20_TYPE_FIRMWARE, C20_TYPE_BATTERY_LEVEL, C20_TYPE_DEVICE_STATE}) {
+  // The app's order. Requests older firmware may not answer are optional,
+  // and dropped for a trap once it has ignored them.
+  auto request = [this](uint8_t type, bool optional) {
+    if (optional && this->trap_->skips_optional(type))
+      return;
     Op r{OpKind::C20_REQUEST};
     r.expect_type = type;
     r.data = c20_build_request(type);
+    r.optional = optional;
     this->ops_.push_back(std::move(r));
-  }
-  if (now != 0) {
-    // Counting the log's TRIGGER events is the only strike count that
-    // matched the app. The trap scans its log at a fixed pace (a full replay
-    // takes ~12 s), so the trap decides whether this poll needs the whole
-    // log or only the events since the last completed window.
-    uint32_t start = this->trap_->log_window_start(now);
-    Op logs{OpKind::C20_LOGS};
-    logs.data = c20_build_logs_request(start, now, C20_LOGS_FLAG_STRIKER_EVENTS);
-    this->ops_.push_back(std::move(logs));
-  }
+  };
+  request(C20_TYPE_BOOTLOADER_VERSION, true);
+  request(C20_TYPE_FIRMWARE, false);
+  request(C20_TYPE_DEVICE_STATE, false);
+  request(C20_TYPE_BATTERY_LEVEL, false);
+  request(C20_TYPE_INPUT_STATES, true);
+  if (this->trap_->uses_kill_history())
+    request(C20_TYPE_KILL_HISTORY, true);
+  // The trap plans the log window when this op is reached, once this
+  // session's KillHistory is in; the request may be skipped then.
+  if (now != 0)
+    this->ops_.push_back(Op{OpKind::C20_LOGS});
 }
 
 void GoodnatureConnection::run_next_op_() {
@@ -509,6 +523,10 @@ void GoodnatureConnection::run_next_op_() {
         }
         data = src->data();
         len = 2;
+      }
+      if (op.skip_zero && *parse_u16_le(data, len) == 0) {
+        this->op_done_();
+        return;
       }
       auto *chr = this->find_gn_char_(op.gn_uuid);
       if (chr == nullptr) {
@@ -565,6 +583,14 @@ void GoodnatureConnection::run_next_op_() {
         // No notifications, so no answer can arrive: skip instead of timing out.
         this->op_done_();
         return;
+      }
+      if (op.kind == OpKind::C20_LOGS) {
+        uint32_t now = this->hub_->now_epoch(), start = 0, flags = 0;
+        if (now == 0 || !this->trap_->plan_striker_log(now, start, flags)) {
+          this->op_done_();
+          return;
+        }
+        op.data = c20_build_logs_request(start, now, flags);
       }
       this->current_handle_ = this->nus_rx_->handle;
       ESP_LOGD(TAG, "[%s] UART request: %s", this->address_str(), to_hex(op.data.data(), op.data.size()).c_str());

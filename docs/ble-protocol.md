@@ -1,6 +1,6 @@
 # Goodnature BLE protocol reference
 
-Reverse engineered from gateway captures, this gateway's parser, and the [ha-goodnature](https://github.com/codyc1515/ha-goodnature) integration. The A24 examples below came from one Smart Cap running firmware 1.3.0. Treat layouts not marked **observed** as working interpretations that may vary by firmware.
+Reverse engineered from gateway captures, this gateway's parser, the [ha-goodnature](https://github.com/codyc1515/ha-goodnature) integration, the decompiled Goodnature Android app (3.5.3 and 3.6.1) and the strings in the Mouse Trap firmware images it bundles (0.2.570 and 0.3.730). The A24 examples below came from one Smart Cap running firmware 1.3.0. Treat layouts not marked **observed** as working interpretations that may vary by firmware; "the app" below means those app versions.
 
 ## Discovery
 
@@ -33,7 +33,17 @@ The captured trap used a random BLE address, advertised the local name `GN` padd
 05 09 47 4E 00 00                complete local name: GN\0\0
 ```
 
-The first two UUID slots contain `44 23 26 97`, yielding serial `97262344` when displayed in reverse byte order. The next four slots are **not** stable measurements: another packet from the same trap contained `26 00 34 12 FD D8 00 01`. Their meanings are unknown; do not derive strikes, battery, or firmware from them. `0x1234` in the fourth slot and the `GN` name are useful discovery markers for this profile. A burst of advertisements can indicate activity, but only a GATT read confirms the strike counter.
+The six 16-bit values are data, not services. The app accepts an advertisement only with exactly six; read as little-endian words:
+
+| Slot | Contents |
+|---|---|
+| [0], [1] | serial: `44 23 26 97` → `97262344` (shown in reverse byte order) |
+| [2] | low byte flags: `0x01` strikes available, `0x02` activated, `0x04` moving, `0x08` low battery, `0x10` output power, `0x20` new event, `0x40` new error. High byte device type. |
+| [3] | `0x1234`, a marker |
+| [4] | high byte battery voltage, `V = raw / 255 × 3.6`; low byte battery internal resistance (raw, units unknown). `0x0000` before the battery has been measured. |
+| [5] | high byte kill count (low 8 bits of `D20D`), low byte unread kills (not yet acknowledged on the trap) |
+
+The second captured packet, `26 00 34 12 FD D8 00 01`, decodes as flags `0x26` (activated, moving, new event), battery 3.05 V with internal resistance 253, one kill and none unread; it matches `FAD1` `D8` and `FAD2` `FD` read over GATT. The first packet was sent before any strike. The app reads its A24 battery only from here, never over GATT, and uses the flags and kill counts only for logging. `tools/gateway_inspect.py decode` decodes an `ADV` log line or a **Last Advertisement** value.
 
 ## C20 advertisement (manufacturer data, 9 bytes)
 
@@ -41,7 +51,7 @@ The first two UUID slots contain `44 23 26 97`, yielding serial `97262344` when 
 |---|---|
 | 0–3 | serial number, u32 LE, shown as 8 hex digits |
 | 4 | device type |
-| 5 | flags per the reference integration: `0x01` activated, `0x02` strikes available, `0x08` low battery, `0x10` charging, `0x20` USB connected, `0x40` discoverable. **Observed** on two Mouse Traps (firmware 0.3.730), only partly matching: `0x02` tracks the kill alert (`0x06` with an alert, `0x04` about 6 s after SetCommand(CLEAR), still `0x04` after a power cycle). `0x10` tracks charging: `0x34` while the poll said CHARGING, `0x24` once it said NOT_CHARGING. `0x20` was set throughout that charge, consistent with USB connected. Activated traps send `0x04`, never `0x01`; `0x04` is not in the reference layout. `0x08` and `0x40` not yet seen. |
+| 5 | flags per the reference integration: `0x01` activated, `0x02` strikes available, `0x08` low battery, `0x10` charging, `0x20` USB connected, `0x40` discoverable. **Observed** on two Mouse Traps (firmware 0.3.730), only partly matching: `0x02` tracks the kill alert (`0x06` with an alert, `0x04` about 6 s after SetCommand(CLEAR), still `0x04` after a power cycle). `0x10` tracks charging: `0x34` while the poll said CHARGING, `0x24` once it said NOT_CHARGING. `0x20` was set throughout that charge, consistent with USB connected. Activated traps send `0x04`, never `0x01`; `0x04` is not in the reference layout. `0x08` and `0x40` not yet seen. The app uses `0x08` for its background low-battery check, `0x10`/`0x20` only to filter traps when adding one, and logs `0x02`. |
 | 6–7 | strike count, u16 LE. Matches the lifetime total the app shows. |
 | 8 | documented as battery percent. On the Mouse Trap it is the **battery state** enumeration (`4` = NORMAL) while the UART battery level said 92 %, so the gateway treats it as a state and takes the percentage from the poll. |
 
@@ -55,64 +65,89 @@ Custom short IDs in this section expand into `0000XXXX-1212-efde-1523-785fef13d1
 |---|---|---|
 | `1800` Generic Access | `2A00`: 0003 (RW), `2A01`: 0005 (R), `2A04`: 0007 (R), `2AA6`: 0009 (R) | Standard BLE service |
 | `1801` Generic Attribute | `2A05`: 000C (I) | Standard BLE service |
-| `E770` | `E771`: 0010 (RWN), `E773`: 0013 (RWN), `E772`: 0016 (RN) | Unknown |
-| `FADE` | `FAD1`: 001A (RN), `FAD2`: 001D (RN) | Battery telemetry, units unknown |
+| `E770` | `E771`: 0010 (RWN), `E773`: 0013 (RWN), `E772`: 0016 (RN) | Error channel. App names: `E771` Error Displayed, `E772` Error Data, `E773` Error Read. The app never reads them; the gateway reads them for diagnostics (**Last Error Data**). **Trap Error** follows the advertisement's new-error flag instead. |
+| `FADE` | `FAD1`: 001A (RN), `FAD2`: 001D (RN) | Battery. App names: `FAD1` Battery Voltage, `FAD2` Battery Internal Resistance (see below) |
 | `F1AE` | `F1AF`: 0021 (RWN) | Time |
-| `DE11` | `DE12`: 0025 (RN), `DE13`: 0028 (RWN), `DE14`: 002B (RN), `DE15`: 002E (RN), `DE16`: 0031 (RWN), `DE17`: 0034 (RWN) | Identity, control, state, configuration |
-| `D00D` | `D20D`: 0038 (RWN), `D30D`: 003B (RN), `D60D`: 003E (RWN), `D50D`: 0041 (RN) | Strike counters and record |
-| `DEAD` | `DEED`: 0045 (RN), `D2ED`: 0048 (RWN), `D3ED`: 004B (RWN) | Event channel; details unconfirmed |
+| `DE11` | `DE12`: 0025 (RN), `DE13`: 0028 (RWN), `DE14`: 002B (RN), `DE15`: 002E (RN), `DE16`: 0031 (RWN), `DE17`: 0034 (RWN) | App names: `DE12` Device ID, `DE13` Device Control, `DE14` Device State, `DE15` Device Version. `DE16`, `DE17` unnamed. |
+| `D00D` | `D20D`: 0038 (RWN), `D30D`: 003B (RN), `D60D`: 003E (RWN), `D50D`: 0041 (RN) | App names: `D20D` Kill Displayed, `D30D` Kill Data, `D50D` Kill State, `D60D` Kill Read |
+| `DEAD` | `DEED`: 0045 (RN), `D2ED`: 0048 (RWN), `D3ED`: 004B (RWN) | Event channel. App names: `DEED` Event Data, `D2ED` Event Displayed, `D3ED` Event Read |
 | `FE59` | `8EC90003-F315-4F60-9FB8-838830DAEA50`: 004F (WI) | Separate vendor service; purpose unknown |
 
 The table gives characteristic value handles in hex. `N` denotes the advertised notify property; the gateway currently reads these characteristics instead of subscribing.
 
 ### Values and decoding
 
-| Characteristic | Observed or implemented interpretation |
+| Characteristic | Interpretation (app = Goodnature app 3.5.3 / 3.6.1) |
 |---|---|
-| `DE12` | Serial: four binary bytes in reverse display order. `44 23 26 97` → `97262344`. The same four bytes appeared in the advertisement and strike record. |
-| `DE15` | Firmware: captured `01 03 00` → `1.3.0`. The parser also accepts `01 03` and ASCII `0103`; those formats were not captured from this trap. |
-| `D20D` | Little endian 16-bit strike counter used for **Strikes**. Reads of `1` and later `2` were observed. Whether this counter ever resets remains unverified. Writing the current value back selects a `D30D` record in the gateway's test-fire script. |
-| `D60D` | Little endian 16-bit read or acknowledged counter. A read of `1` while `D20D` was `2` produced a pending Kill Alert. The gateway uses `D20D > D60D`. |
-| `D30D` | At least 12 bytes. Example: `82 44 23 26 97 12 F7 60 C7 01 01 00`. Bytes 1–4 repeat the serial bytes; byte 5 (`12`) is retained as flags, with individual bits unknown. Bytes 6–9 are a little endian count of minutes since Unix epoch (`2026-09-28 19:03 UTC` in this sample); bytes 10–11 are a little endian strike ID (`1`). Byte 0 (`82`) has unknown meaning. The parser also accepts an ASCII hex representation, not seen in this capture. |
-| `FAD1` | One byte in this capture: `D8` (216), and later `E3` (227). The parser also accepts two bytes. Its physical units and a conversion to charge percentage are unverified. |
-| `FAD2` | One byte `FD` (253) in this capture. Meaning and units unverified; an earlier reverse engineering label was “internal resistance.” |
-| `DE14`, `D50D`, `DE16`, `DE17`, `DEED` | Present in GATT, but their values or bit fields are not decoded here. |
-| `F1AF` | Gateway writes Unix time in **minutes**, little endian 32-bit (`floor(epoch seconds / 60)`). |
+| `DE12` | Serial: four binary bytes in reverse display order. `44 23 26 97` → `97262344`. The same four bytes appear in the advertisement and the kill record. |
+| `DE15` | Firmware: each byte as a decimal, joined with `.`: captured `01 03 00` → `1.3.0`. |
+| `DE13` | Control. `0x02` ends a sync and acknowledges (the app writes it last, then disconnects), `0x05` test fires, `0x00` activates a new trap, `0x04` is part of the app's old setup flow. |
+| `D20D` | u16 LE, the number of the newest kill record, used for **Strikes**. It is also a cursor: writing a record number selects what `D30D` returns. Reads of `1` and later `2` were observed; the app has no handling for a reset. |
+| `D30D` | The selected kill record, 12 bytes: `[0]` peak level, `[1..4]` the trap's ID (the serial bytes), `[5]` air temperature (signed, °C), `[6..9]` minutes since the Unix epoch (u32 LE), `[10..11]` record number (u16 LE, 0 = no record). Example `82 44 23 26 97 12 F7 60 C7 01 01 00`: record 1 at `2026-09-28 19:03 UTC`, 18 °C. The parser also accepts an ASCII-hex form, not seen in a capture. |
+| `D60D` | u16 LE, the last record acknowledged. The app writes the highest record it read here at the end of every sync. |
+| `D2ED` / `D3ED` | u16 LE movement-event counter (stored by the app as a movement count) and its read pointer, which the app reads but never writes. |
+| `D50D` | Kill state: 0 idle, 1 wait, 2 recording, 3 buffer. Only the app's old setup flow subscribes to it. |
+| `FAD1` | Battery voltage, one byte: `V = raw / 255 × 3.6` (216 → 3.05 V, 227 → 3.20 V). The same byte as advertisement slot [4]. |
+| `FAD2` | Battery internal resistance, one byte, units unknown. The app rates the battery from it: under 56 Full, under 200 Medium, under 230 Low, otherwise Critical. The capture read 253 (Critical) from a working trap. |
+| `F1AF` | Unix time in **minutes**, little endian 32-bit (`floor(epoch seconds / 60)`), written by the gateway and the app on connect. |
+| `DE14`, `DE16`, `DE17`, `DEED`, `E771`–`E773` | Never read or written by the app. The gateway reads `DE14`, `E771`, `E772` and `E773` for diagnostics only. |
 
-`D2ED` and `D3ED` are treated as the displayed and acknowledged event counters by the reset script. This interpretation and the meanings of `E770` and `FE59` need more captures. `FAD3` appears in earlier protocol notes but was **absent** from this trap's GATT table.
+`FE59` needs more captures. `FAD3` appears in earlier protocol notes but was **absent** from this trap's GATT table.
+
+### How the app syncs an A24
+
+On connect the app reads `D3ED`, `D2ED`, `DE12`, `DE15`, `D60D` and `D20D` (three tries each, 1.2 s apart), subscribes to `D20D` only, and writes `F1AF`. It then walks the records backwards: for each `n` from `D20D` down to 1 it writes `n` to `D20D` and reads `D30D`, stopping at a record older than the newest strike it already has. Finally it writes the highest record number read to `D60D`, writes `0x02` to `DE13`, and disconnects a second later. Its background sync does the same in the other direction, from `D60D + 1` up to `D20D`, writing `D60D` after each record. Test fire: `0x05` to `DE13`, wait for the `D20D` notification, write that value to `D20D`, read `D30D`.
+
+The app never wakes an A24: it only syncs when the trap wakes, after a strike, when its battery goes in, or when it is shaken until the red light flashes ("Your Smart Cap only syncs automatically when it has strike data to share").
 
 ### Gateway operations
 
-- **Poll:** if enabled and the clock is set, write `F1AF`; then read `DE12`, `DE15`, `D20D`, `FAD1`, `D60D`, `D30D`, `DE14`, `FAD2`, in that order. Missing characteristics are skipped. The A24 sleeps and may stop accepting connections before the poll finishes.
-- **Clear Kill Alert:** read `D20D` and `D2ED`; copy their values to `D60D` and `D3ED` respectively; write `02` to `DE13`; then poll. These writes are the gateway's implemented acknowledgement sequence, not a fully verified on-air trace of the app.
-- **Test Fire:** write `05` to `DE13`, wait 500 ms, read `D20D`, write that value back to `D20D`, read `D30D`, then poll. **This command fires the trap.** The sequence is implemented in the gateway but was not exercised on the captured trap.
+- **Poll:** if enabled and the clock is set, write `F1AF`; read `DE12`, `DE15` and `D20D`; write `D20D` back (selecting the newest record, unless there are none); read `D30D`, `D60D`, `FAD1`, `FAD2`, `DE14`, `E771`, `E773`, `E772`; then acknowledge like the app: copy `D20D` to `D60D` (unless there are no kills) and write `02` to `DE13`. Missing characteristics are skipped. The A24 sleeps and may stop accepting connections before the poll finishes; the acknowledgement then waits for the next session.
+- **Kill Alert** is the gateway's own: it turns on when **Strikes** goes up, when a poll finds `D20D` ahead of `D60D` (kills nobody acknowledged), or when an advertisement shows unread kills, and it stays on until **Clear Kill Alert**, which only clears it in the gateway. Because every session acknowledges, the trap stops waking to report the kills; the Goodnature app still downloads them, but without its own "new strike" notification.
+- **Test Fire:** write `05` to `DE13`, wait 500 ms, read `D20D`, write that value back to `D20D`, read `D30D`, then poll. **This command fires the trap.** The new record counts in **Strikes** (and CO₂) but fires the Strike event as `test_fire` and does not raise **Kill Alert**. The sequence is implemented in the gateway but was not exercised on the captured trap.
 
 ### Battery and contact state
 
-No charge percentage or low-battery threshold has been established for the observed `FAD1`/`FAD2` values. Without user-supplied raw calibration, the gateway leaves A24 **Battery %** and **Battery Low** unavailable. Its **Battery Status** text uses contact as a proxy: `Normal` once the gateway has received an advertisement from the trap. The A24 advertises when switched on and after a kill and is otherwise silent, so the gateway treats it as present, and **Online**, from its first check-in until it is forgotten. It does not measure charge or observe a sync performed only by the Goodnature app. **Last Seen** records the gateway's latest advertisement; a successful GATT poll is a separate event.
+**Battery Voltage** comes from `FAD1` or the advertisement, and **Battery Status** is the app's internal-resistance rating. **Battery Low** follows the advertisement's low-battery flag rather than that rating, because the one capture read Critical from a working battery. The app has no percentage for an A24; the optional `a24_battery_*_raw` calibration still provides one from the raw voltage byte. The A24 advertises when switched on, after a kill and when shaken, and is otherwise silent, so the gateway treats it as present, and **Online**, from its first check-in until it is forgotten. **Last Seen** records the gateway's latest advertisement; a successful GATT poll is a separate event.
 
-No A24 characteristic in this capture reported CO₂ shots remaining. The gateway calculates that Home Assistant value from its configured canister capacity, a stored baseline for `D20D`, and any manual **CO₂ Shot Used** adjustments. The baseline is established when the counter first becomes known or when the user marks a new canister.
+No A24 characteristic reports CO₂ shots remaining. Like the app, the gateway counts down from the canister capacity (24): one shot per strike since the canister was replaced, including test fires, plus one shot lost for every 21 days in the trap (`co2_leak_days`), plus any **CO₂ Shot Used** adjustments. The app rates 12 or more Fresh, 5 or more Ok, 1–4 Low and 0 Replace; **CO₂ Low** is on at 4 or fewer (`co2_low_threshold`). The paste lasts 180 days in the app (`lure_life_days`).
 
 ## C20 Nordic UART
 
 Service `6e400001-b5a3-f393-e0a9-e50e24dcca9e`, write to RX `6e400002…`, notifications from TX `6e400003…`.
 
-Frame: `B0 <escaped body> B1`. Body: `type, subtype, payload…, crc16 LE`. CRC16-CCITT, polynomial `0x1021`, init `0xFFFF`, over `type + subtype + payload`. Inside the body `B0`/`B1` are sent as `B2 (byte ^ 0x04)`; this implementation escapes `B2` the same way.
+Frame: `B0 <escaped body> B1`. Body: `type, subtype, payload…, crc16 LE`. CRC16-CCITT, polynomial `0x1021`, init `0xFFFF`, over `type + subtype + payload`. Inside the body `B0`/`B1` are sent as `B2 (byte ^ 0x04)`; this implementation escapes `B2` the same way. The app escapes only `B0`/`B1` but, receiving, treats any `B2` as an escape, so a literal `B2` it sends would be misread by a decoder like its own; escaping it is the safe choice. The CRC is CRC-16/CCITT-FALSE.
 
 | Type | Name | Request | Response payload |
 |---|---|---|---|
 | `0x04` | set time | subtype `0x02`, u32 LE epoch seconds | |
+| `0x07` | hardware build target | | NUL-terminated string (the 0.2.570 image names itself `c20_dts_v2`). The app decodes it; no request for it was found. |
 | `0x08` | firmware | subtype `0x00` | NUL-terminated string |
-| `0x10` | device state | subtype `0x00` | `[0..3]` time, `[4]` device state, `[5]` kill state, `[6]` tray, `[7]` battery state, `[8]` charge state, `[9]` USB state, `[10..13]` strike count u32. On the Mouse Trap this count read `0` while the advertisement said `14`, so it is not the lifetime total (probably kills since the last clear); the gateway ignores it when an advertisement count exists. |
+| `0x10` | device state | subtype `0x00` | `[0..3]` time, `[4]` device state, `[5]` kill state, `[6]` tray, `[7]` battery state, `[8]` charge state, `[9]` USB state, `[10..13]` strike count u32. On the Mouse Trap this count read `0` while the advertisement said `14`, so it is not the lifetime total (probably kills since the last clear). The app never reads it, and neither does the gateway. |
 | `0x11` | battery level | subtype `0x00` | `[0..3]` time, `[4]` percent |
-| `0x12` | set command | subtype `0x02`, u32 LE command | response subtype `0x01`; async `0x10` and `0x31` follow |
-| `0x31` | striker event | (unsolicited, and replayed inside `0x45`) | `[0..3]` time, `[4..7]` "strike count" (read `8` on a trap whose log holds one kill; meaning unknown), `[8]` source, `[9..12]` trigger number, `[13..16]` fire, `[17..20]` rewind, `[25..28]` backdrive. The durations read 31128 / 306000 / 15000, which only make sense as microseconds. **Kills = number of TRIGGER events in the log**; that is the one figure that matched the app (1 and 0 for two traps advertising 14 and 3). |
-| `0x40` | logs request | subtype `0x00`, u32 start, u32 end, u32 flags (`1<<1` striker events) | LogsResponse (`start, end, flags` echoed) terminates the stream. The trap scans its log at a fixed pace: a 24 h window answers in ~0.5 s, a window from 2017 takes ~12 s, and a start of `0` streamed the events but never sent the terminator. The gateway waits up to 25 s. It replays from 2017 when the count is unknown, once a day and on Poll Now; otherwise it asks only for events since the last completed window, minus a 2 min overlap, and ignores TRIGGER events at or before the last known strike time. |
+| `0x12` | set command | subtype `0x02`, u32 LE command | response subtype `0x01`; async `0x10` and `0x31` follow. The app does not wait for the response. |
+| `0x13` | activation key | subtype `0x00` | 16 bytes, a UUID (two big endian u64). The app reads it when activating a trap. |
+| `0x14` | kill history | subtype `0x00` | ten u32 kill times, epoch seconds, `0` for an empty slot. On firmware after 0.2.550 the app counts kills from this, asking at connect and whenever the device state says DETECTED. |
+| `0x30` | trigger event | (replayed inside `0x45` with log flag bit 0) | `[0..3]` time, `[4..7]` count; from firmware 0.1.276 the infrared readings, u32 each: inner sensor ambient `[8]`, on reading `[12]`, baseline `[16]`, threshold `[20]`, on time `[24]`; outer sensor ambient `[28]`, on reading `[32]`, baseline `[36]`, threshold `[40]`, on time `[44]`; alert time `[48]`. The baselines are IEEE 11073 32-bit FLOATs (signed 24-bit mantissa × 10 ^ signed 8-bit exponent, the high byte). The gateway asks for these only around new kills (see below). |
+| `0x31` | striker event | (unsolicited, and replayed inside `0x45`) | `[0..3]` time, `[4..7]` "strike count" (read `8` on a trap whose log holds one kill; meaning unknown), `[8]` source, `[9..12]` trigger number, `[13..16]` fire, `[17..20]` rewind, `[21..22]` peak fire current and `[23..24]` peak rewind current (i16 LE, mA per the firmware's log strings; from 0.1.276), `[25..28]` backdrive (from 0.1.403). The durations read 31128 / 306000 / 15000, which only make sense as microseconds. TRIGGER events in the log matched the app's kill total (1 and 0 for two traps advertising 14 and 3). Sources (app 3.6.1): 0 SENSOR, 1 UNUSED, 2 APP (test fire), 3 BACKDRIVE_TEST (a motor self-test), 4 UNKNOWN; only SENSOR is a kill. On firmware after 0.2.550 the app takes kills from `0x14` instead and uses live striker events only for its test fires. |
+| `0x40` | logs request | subtype `0x00`, u32 start, u32 end, u32 flags | Flag bits per the app: 0 trigger events, 1 striker events, 2 errors, 3 warnings, 4 general events, 5 device status log, 6 debug info. The gateway asks only for striker events. LogsResponse (`start, end, flags` echoed) terminates the stream. The trap scans its log at a fixed pace: a 24 h window answers in ~0.5 s, a window from 2017 takes ~12 s, and a start of `0` streamed the events but never sent the terminator. The gateway waits up to 25 s. On firmware after 0.2.550 it replays from 2017 only when the count is unknown and once per Poll Now press. On older firmware it also replays once a day, and otherwise asks only for events since the last completed window, minus a 2 min overlap, ignoring TRIGGER events at or before the last known strike time. |
 | `0x45` | log event | (streamed) | payload is a nested frame, e.g. a `0x31` striker event |
+| `0x62` | input states | subtype `0x00` | `[0]` charge pin, `[1]` USB pin, `[2]` button pin, `[3]` battery error pin, `[4..5]` battery voltage (i16 LE, mV, `0` = not measured), `[6..7]` motor feedback (i16 LE, units unknown). App 3.6.1 asks with every battery poll, without waiting for an answer. **Observed**: two Mouse Traps on 0.3.730 never answered it in normal operation. The firmware has a "pin states" handler; its handlers also serve a factory interface (`factoryIn` / `factoryOut`), which may be the only place it answers. |
+| `0xF8` | bootloader version | subtype `0x00` | NUL-terminated string. App 3.6.1 asks at connect. **Observed** `2.0.0` (`322e302e30`) on two Mouse Traps on 0.3.730. |
 
 Responses have subtype `0x01`.
 
-Commands: FIRE = `1049702590` (`0x3E9130BE`), CLEAR = `1682499629` (`0x644A8C2D`).
+Commands, sent as the u32 in a `0x12` request:
+
+| Command | Value | Use |
+|---|---|---|
+| FIRE | `0x3E9130BE` (1049702590) | Test fire. The app then waits for the `0x31` striker event. |
+| CLEAR | `0x6448E82D` (1682499629) | Clear the kill alert. Sent from the app's trap screen. |
+| WAKE | `0x528670E4` (1384542436) | App 3.6.1 sends it first in every session, and again when the device state shows a trap that needs battery recovery. The gateway sends it first too. **Observed**: acknowledged with a `0x12` response whose payload echoes the command. |
+| ACTIVATE | `0xE92F9A13` (3912210963) | Defined in the app but never sent by it. Not used by the gateway. |
+| DEACTIVATE | `0x2AFC58D4` (721180884) | Defined in the app but never sent by it. **Observed** on 0.3.730 (tray closed, armed): acknowledged with `0x12`, but the device state stayed ACTIVATED, also on a poll 90 s later, and the trap kept advertising. Not used by the gateway. |
+
+The app also names SLEEP, IDENTIFY, OFF and RESTART, without values.
 
 Enumerations (index → meaning):
 
@@ -122,11 +157,39 @@ Enumerations (index → meaning):
 - battery state: STARTUP, NOT_CONNECTED, CRITICAL, LOW, NORMAL, NO_DATA
 - charge state: NOT_CHARGING, CHARGING, NO_DATA
 - USB: DISCONNECTED, CONNECTED, NO_DATA
-- striker source: TRIGGER, UNUSED, USER, NO_DATA (USER = manual test fire)
+- striker source: TRIGGER, UNUSED, USER, BACKDRIVE_TEST, NO_DATA (app 3.6.1 names: SENSOR, UNUSED, APP, BACKDRIVE_TEST, UNKNOWN; USER = manual test fire)
 
-Poll sequence used here: subscribe TX, set time, request `0x08`, `0x11`, `0x10`, then a logs request for striker events (full or incremental, see above).
+Poll sequence used here, in app 3.6.1's order: subscribe TX, WAKE, set time, request `0xF8`, `0x08`, `0x10`, `0x11`, `0x62`, `0x14`, then a logs request when one is due (see below). A test fire, clear, arm or disarm command goes right after WAKE. The app spaces its requests 50 ms apart without waiting; the gateway waits for each answer. WAKE, `0xF8`, `0x62` and `0x14` are optional for older firmware: no answer within 4 s does not fail the poll, and the gateway stops sending that request to the trap until its firmware version changes or the gateway restarts. `0x14` is skipped on firmware 0.2.550 and older, and a trap that ignores it falls back to counting from the log.
 
-Two Mouse Traps (0.3.730) that had been polled for days started answering the TX CCCD write with ATT error `0x11` (Insufficient Resources) and kept doing so after a power cycle; the Goodnature app could not connect to them either. Writes to RX were still acted on (a CLEAR changed the advertisement flags). When the subscription fails the gateway skips every request, still writes a FIRE or CLEAR command, and ends the session.
+**Gateway kill counting.** Each poll counts the `0x14` entries newer than the newest one counted before; the gateway keeps that time in flash, and it never moves backwards, so the empty history after a factory reset is harmless. The first read is the baseline, because those kills are already in the total. Only SENSOR (TRIGGER) striker events count as kills. The striker log is replayed only for the lifetime total: when it is unknown (a newly found trap), and on Poll Now. If that replay does not finish, the number of `0x14` entries stands in as a lower bound (exact up to ten kills). The logs request is planned once this session's `0x14` answer is in. When the history holds new kills, the gateway asks for striker and trigger events (flags `0b11`) from 2 minutes before the oldest new kill. That short window answers quickly and gives the kills' motor currents and infrared readings, but it is not used for counting.
+
+Two Mouse Traps (0.3.730) that had been polled for days started answering the TX CCCD write with ATT error `0x11` (Insufficient Resources) and kept doing so after a power cycle; the Goodnature app could not connect to them either. A factory reset fixed both. Writes to RX were still acted on (a CLEAR changed the advertisement flags). The app pairs with a trap when it reads Memfault diagnostics (service `54220000-f6a5-4007-a371-722f4ebd8436`, which the user opts into), and the firmware keeps pairings and settings in flash, which a factory reset clears and a power cycle does not. That fits subscription slots used up by stored pairings, but it is not confirmed, and app 3.6.1 has no Memfault code and never pairs. When the subscription fails the gateway skips every request, still writes a FIRE or CLEAR command, and ends the session.
+
+### How the app reads a Mouse Trap
+
+- **Connection:** BALANCED connection priority, no MTU request (23 bytes, so frames span notifications), notifications on TX, write-with-response to RX. A 10 s connect timeout and 10 s per command. While connected it asks for the battery level every 60 s. Its background scan runs every 15 minutes and connects to every trap it owns.
+- **Status**, highest first: device state ERROR → *Error* ("Restart your trap by holding down the button until it starts flashing white"); CHARGING → *Charging*; USB connected but not charging → *Charged* ("Remove the trap from the charger to set it"); kill DETECTED → *New strike*, with an **Empty trap** button that sends CLEAR; tray OPEN → *Trap open* ("Close the trap to set it"); otherwise *Set*. ACTIVATED / DEACTIVATED is never shown.
+- **Battery:** Unknown before a reading, then Charging, Charged, or by level: 85 % and up Full, 45 % Good, 15 % Ok, 5 % Low, below that Empty. It notifies "Low battery" at 20 % or below, or when the advertisement's `0x08` bit is set, once until a reading is no longer low.
+- **Test fire** is offered only when the trap is connected, off USB, the kill state is not DETECTED, the tray is not OPEN and the device state is not ERROR. It sends FIRE and waits up to 10 s for the APP striker event.
+- **Donut** (the lure) lasts 90 days: fresh above half, "good" above a third, "stale" above 6 %, then "replace".
+- **Kills** are the non-test strikes: KillHistory entries newer than the newest one saved (older ones are skipped), plus live APP events as tests.
+
+The gateway follows these: **Trap State**, **Trap Error**, **Armed** (= *Set*), **Battery Status**, **Battery Low**, the Test Fire conditions and a 90-day default lure life.
+
+### Battery recovery (firmware 0.3.730 with bootloader 2.0.0)
+
+App 3.6.1 bundles firmware 0.3.730 and a second image that replaces bootloader 1.0.0 with 2.0.0 (the app: "This second update is critical for battery performance"); the updater leaves any other bootloader alone. With bootloader 2.0.0 the trap runs a one-time **battery recovery** at power-up while on USB power. Per the firmware's log strings:
+
+1. The bootloader starts a PI loop that drives the motor PWM to hold the battery voltage at a target (`VBAT: … mV, Target: … mV, … Duty: …`). It skips the loop if the battery is fine, recovery is already done, or the trap is not charging.
+2. The application firmware takes over (`Handover from bootloader: duty …, I-error …`).
+3. It finishes when the voltage stays below the target for a number of cycles. Otherwise it stops after a maximum run time, ramping the target down near the end; the app says this takes up to 5 minutes.
+4. The trap records that the battery has been recovered and skips the process from then on. With bootloader 1.0.0 it logs `Bootloader v1.0.0 detected, skipping battery recovery`.
+
+No BLE command starts it. The app offers it when a trap reports battery 0 %, charge state NOT_CHARGING (or NO_DATA) and USB CONNECTED. Its instructions: unplug the trap, wait 5 seconds, plug it back in, and wait for the light to pulse white and pink; if it flashes once and turns off, or stops pulsing, repeat. The app's **Start battery recovery** only watches: it polls `0x11` and `0x62` every 5 s, treats CHARGING as recovering and a level above 0 % as done, and gives up if the trap stays disconnected for 3 minutes after charging was seen.
+
+### Firmware updates
+
+The app updates the Mouse Trap with MCUmgr over SMP (service `8d53dc1d-1db7-4cd3-868b-8a527460aa84`), using images bundled in the app: validate, upload, test, reset, confirm. After an update it reconnects and runs the normal session. The gateway does not update firmware.
 
 ## Capturing data from the gateway
 

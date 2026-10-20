@@ -65,6 +65,10 @@ class GoodnatureConnection : public esp32_ble_client::BLEClientBase {
     // Trap clear). Once the trap acknowledges it the action has happened,
     // whatever follows, so it is never resent.
     bool command{false};
+    // A request older firmware may not answer: a timeout does not fail the job.
+    bool optional{false};
+    // WRITE_ECHO_U16: skipped when the value read is 0.
+    bool skip_zero{false};
   };
 
   void dump_gatt_();

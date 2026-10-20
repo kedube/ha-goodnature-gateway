@@ -27,6 +27,7 @@ import esphome.codegen as cg
 from esphome.components import (
     binary_sensor,
     button,
+    datetime,
     esp32_ble,
     esp32_ble_client,
     esp32_ble_tracker,
@@ -56,17 +57,23 @@ from esphome.const import (
     DEVICE_CLASS_BATTERY,
     DEVICE_CLASS_BATTERY_CHARGING,
     DEVICE_CLASS_CONNECTIVITY,
+    DEVICE_CLASS_CURRENT,
     DEVICE_CLASS_DURATION,
     DEVICE_CLASS_OCCUPANCY,
     DEVICE_CLASS_PROBLEM,
     DEVICE_CLASS_SIGNAL_STRENGTH,
+    DEVICE_CLASS_TEMPERATURE,
     DEVICE_CLASS_TIMESTAMP,
+    DEVICE_CLASS_VOLTAGE,
     ENTITY_CATEGORY_CONFIG,
     ENTITY_CATEGORY_DIAGNOSTIC,
     STATE_CLASS_MEASUREMENT,
     STATE_CLASS_TOTAL_INCREASING,
+    UNIT_CELSIUS,
     UNIT_DECIBEL_MILLIWATT,
+    UNIT_MILLIAMP,
     UNIT_PERCENT,
+    UNIT_VOLT,
 )
 from esphome.core import CORE, CoroPriority, coroutine_with_priority
 from esphome.core.config import Device
@@ -80,6 +87,7 @@ AUTO_LOAD = [
     "esp32_ble_client",
     "binary_sensor",
     "button",
+    "datetime",
     "event",
     "number",
     "sensor",
@@ -100,6 +108,7 @@ ForgetAllButton = goodnature_ns.class_("ForgetAllButton", button.Button)
 DiscoverySwitch = goodnature_ns.class_("DiscoverySwitch", switch.Switch)
 DebugSwitch = goodnature_ns.class_("DebugSwitch", switch.Switch)
 LureLifeNumber = goodnature_ns.class_("LureLifeNumber", number.Number)
+ReplacedDate = goodnature_ns.class_("ReplacedDate", datetime.DateEntity)
 TrapButtonKind = goodnature_ns.enum("TrapButtonKind", is_class=True)
 
 CONF_CONNECTION_ID = "connection_id"
@@ -107,7 +116,9 @@ CONF_MAX_TRAPS = "max_traps"
 CONF_SLOT_NAME_PREFIX = "slot_name_prefix"
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_LURE_LIFE_DAYS = "lure_life_days"
+CONF_MOUSE_TRAP_LURE_LIFE_DAYS = "mouse_trap_lure_life_days"
 CONF_CO2_CAPACITY = "co2_capacity"
+CONF_CO2_LEAK_DAYS = "co2_leak_days"
 CONF_CO2_LOW_THRESHOLD = "co2_low_threshold"
 CONF_OFFLINE_TIMEOUT_A24 = "offline_timeout_a24"
 CONF_OFFLINE_TIMEOUT_C20 = "offline_timeout_c20"
@@ -151,10 +162,16 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(
                 CONF_POLL_INTERVAL, default="15min"
             ): cv.positive_time_period_milliseconds,
+            # The app's lure lives: 180 days of A24 paste, 90 of Mouse Trap donut.
             cv.Optional(CONF_LURE_LIFE_DAYS, default=180): cv.int_range(
                 min=1, max=730
             ),
+            cv.Optional(CONF_MOUSE_TRAP_LURE_LIFE_DAYS, default=90): cv.int_range(
+                min=1, max=730
+            ),
             cv.Optional(CONF_CO2_CAPACITY, default=24): cv.int_range(min=1, max=1000),
+            # The app counts one CO2 shot lost per 21 days in the trap; 0 = off.
+            cv.Optional(CONF_CO2_LEAK_DAYS, default=21): cv.int_range(min=0, max=365),
             cv.Optional(CONF_CO2_LOW_THRESHOLD, default=4): cv.int_range(
                 min=0, max=1000
             ),
@@ -260,15 +277,71 @@ TRAP_SENSORS = [
         },
     ),
     (
-        "battery_voltage_raw",
-        "Battery Voltage Raw",
-        "set_battery_voltage_sensor",
+        # A24 only (raw / 255 * 3.6 V, as the app reads it).
+        "battery_voltage",
+        "Battery Voltage",
+        "set_battery_volts_sensor",
         {
-            CONF_ICON: "mdi:battery-unknown",
+            CONF_DEVICE_CLASS: DEVICE_CLASS_VOLTAGE,
+            CONF_UNIT_OF_MEASUREMENT: UNIT_VOLT,
+            CONF_STATE_CLASS: STATE_CLASS_MEASUREMENT,
+            CONF_ACCURACY_DECIMALS: 2,
+            CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
+        },
+    ),
+    (
+        # A24 only: raw, units unknown; the app rates the battery from it.
+        "battery_internal_resistance",
+        "Battery Internal Resistance",
+        "set_battery_resistance_sensor",
+        {
+            CONF_ICON: "mdi:battery-heart-variant",
+            CONF_STATE_CLASS: STATE_CLASS_MEASUREMENT,
             CONF_ACCURACY_DECIMALS: 0,
             CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
             CONF_DISABLED_BY_DEFAULT: True,
         },
+    ),
+    (
+        "peak_fire_current",
+        "Peak Fire Current",
+        "set_peak_fire_current_sensor",
+        {
+            CONF_DEVICE_CLASS: DEVICE_CLASS_CURRENT,
+            CONF_UNIT_OF_MEASUREMENT: UNIT_MILLIAMP,
+            CONF_STATE_CLASS: STATE_CLASS_MEASUREMENT,
+            CONF_ACCURACY_DECIMALS: 0,
+            CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
+        },
+    ),
+    (
+        "peak_rewind_current",
+        "Peak Rewind Current",
+        "set_peak_rewind_current_sensor",
+        {
+            CONF_DEVICE_CLASS: DEVICE_CLASS_CURRENT,
+            CONF_UNIT_OF_MEASUREMENT: UNIT_MILLIAMP,
+            CONF_STATE_CLASS: STATE_CLASS_MEASUREMENT,
+            CONF_ACCURACY_DECIMALS: 0,
+            CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
+        },
+    ),
+    *(
+        (
+            f"{side}_{reading}",
+            f"{side.title()} Sensor {label}",
+            f"set_{side}_{reading}_sensor",
+            {
+                CONF_ICON: "mdi:motion-sensor",
+                CONF_STATE_CLASS: STATE_CLASS_MEASUREMENT,
+                CONF_ACCURACY_DECIMALS: 0,
+                CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
+                CONF_DISABLED_BY_DEFAULT: True,
+            },
+        )
+        # Infrared readings from the last trigger event; units unknown.
+        for side in ("inner", "outer")
+        for reading, label in (("reading", "Reading"), ("ambient", "Ambient"), ("threshold", "Threshold"))
     ),
     (
         "rssi",
@@ -298,6 +371,18 @@ TRAP_SENSORS = [
         "set_last_strike_sensor",
         {
             CONF_DEVICE_CLASS: DEVICE_CLASS_TIMESTAMP,
+            CONF_ACCURACY_DECIMALS: 0,
+        },
+    ),
+    (
+        # A24 only: air temperature in the newest kill record.
+        "last_strike_temperature",
+        "Last Strike Temperature",
+        "set_strike_temperature_sensor",
+        {
+            CONF_DEVICE_CLASS: DEVICE_CLASS_TEMPERATURE,
+            CONF_UNIT_OF_MEASUREMENT: UNIT_CELSIUS,
+            CONF_STATE_CLASS: STATE_CLASS_MEASUREMENT,
             CONF_ACCURACY_DECIMALS: 0,
         },
     ),
@@ -379,6 +464,18 @@ TRAP_BINARY_SENSORS = [
         {CONF_DEVICE_CLASS: DEVICE_CLASS_PROBLEM, CONF_ICON: "mdi:gas-cylinder"},
     ),
     (
+        "battery_recovery",
+        "Battery Recovery Needed",
+        "set_battery_recovery_binary_sensor",
+        {CONF_DEVICE_CLASS: DEVICE_CLASS_PROBLEM, CONF_ICON: "mdi:battery-alert"},
+    ),
+    (
+        "error",
+        "Trap Error",
+        "set_error_binary_sensor",
+        {CONF_DEVICE_CLASS: DEVICE_CLASS_PROBLEM, CONF_ICON: "mdi:alert-circle-outline"},
+    ),
+    (
         "online",
         "Online",
         "set_online_binary_sensor",
@@ -415,10 +512,24 @@ TRAP_TEXT_SENSORS = [
         {CONF_ICON: "mdi:chip", CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC},
     ),
     (
+        "bootloader",
+        "Bootloader",
+        "set_bootloader_text_sensor",
+        {CONF_ICON: "mdi:chip", CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC},
+    ),
+    (
         "mac",
         "MAC Address",
         "set_mac_text_sensor",
         {CONF_ICON: "mdi:bluetooth", CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC},
+    ),
+    (
+        # Mouse Trap only: the app's status (Error, Charging, Charged, New
+        # strike, Tray open, Set).
+        "trap_state",
+        "Trap State",
+        "set_trap_state_text_sensor",
+        {CONF_ICON: "mdi:list-status"},
     ),
     (
         "status",
@@ -443,6 +554,16 @@ TRAP_TEXT_SENSORS = [
         "set_last_frame_text_sensor",
         {
             CONF_ICON: "mdi:code-brackets",
+            CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
+            CONF_DISABLED_BY_DEFAULT: True,
+        },
+    ),
+    (
+        "error_data",
+        "Last Error Data",
+        "set_error_data_text_sensor",
+        {
+            CONF_ICON: "mdi:alert-circle-outline",
             CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
             CONF_DISABLED_BY_DEFAULT: True,
         },
@@ -597,6 +718,22 @@ async def _build_trap_entities(hub_id: core.ID, n: int, trap) -> None:
     cg.add(var.set_parent(trap))
     cg.add(trap.set_lure_life_number(var))
 
+    for suffix, name, co2, setter in (
+        ("lure_replaced_on", "Lure Replaced On", False, "set_lure_date"),
+        ("co2_replaced_on", "CO2 Replaced On", True, "set_co2_date"),
+    ):
+        cfg = _validated(
+            datetime.date_schema(ReplacedDate),
+            _entity_id(hub_id, n, suffix, ReplacedDate),
+            name,
+            {CONF_ICON: "mdi:calendar-check", CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_CONFIG},
+            device_id,
+        )
+        var = await _new_slot_entity(cfg, "date", datetime.setup_datetime_core_)
+        cg.add(var.set_parent(trap))
+        cg.add(var.set_co2(co2))
+        cg.add(getattr(trap, setter)(var))
+
     cfg = _validated(
         event.event_schema(),
         _entity_id(hub_id, n, "strike_event", event.Event),
@@ -687,7 +824,9 @@ async def to_code(config):
 
     cg.add(hub.set_poll_interval(config[CONF_POLL_INTERVAL]))
     cg.add(hub.set_lure_life_days(config[CONF_LURE_LIFE_DAYS]))
+    cg.add(hub.set_mouse_trap_lure_life_days(config[CONF_MOUSE_TRAP_LURE_LIFE_DAYS]))
     cg.add(hub.set_co2_capacity(config[CONF_CO2_CAPACITY]))
+    cg.add(hub.set_co2_leak_days(config[CONF_CO2_LEAK_DAYS]))
     cg.add(hub.set_co2_low_threshold(config[CONF_CO2_LOW_THRESHOLD]))
     cg.add(hub.set_offline_timeout_c20(config[CONF_OFFLINE_TIMEOUT_C20]))
     cg.add(hub.set_write_time_on_connect(config[CONF_WRITE_TIME_ON_CONNECT]))

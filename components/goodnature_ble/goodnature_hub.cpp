@@ -433,7 +433,7 @@ void GoodnatureHub::request_job(GoodnatureTrap *trap, Job job) {
     this->maybe_connect_(trap, now);
   } else {
     ESP_LOGI(TAG, "[%s] %s queued; will connect when the trap next advertises", trap->address_str(),
-             job == Job::TEST_FIRE ? "test fire" : (job == Job::RESET_ALERT ? "reset alert" : "poll"));
+             job_label(job));
   }
 }
 

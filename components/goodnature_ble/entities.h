@@ -7,6 +7,7 @@
 
 #include "esphome/core/helpers.h"
 #include "esphome/components/button/button.h"
+#include "esphome/components/datetime/date_entity.h"
 #include "esphome/components/number/number.h"
 #include "esphome/components/switch/switch.h"
 
@@ -40,6 +41,19 @@ class DebugSwitch : public switch_::Switch, public Parented<GoodnatureHub> {
     this->parent_->set_debug_enabled(state);
     this->publish_state(state);
   }
+};
+
+// Lure Replaced On / CO2 Replaced On: the stored replacement date, and a
+// way to set one in the past (the app lets you pick it too).
+class ReplacedDate : public datetime::DateEntity, public Parented<GoodnatureTrap> {
+ public:
+  void set_co2(bool co2) { this->co2_ = co2; }
+  // Shows the local date of an epoch.
+  void show(uint32_t epoch);
+
+ protected:
+  void control(const datetime::DateCall &call) override;
+  bool co2_{false};
 };
 
 class LureLifeNumber : public number::Number, public Parented<GoodnatureTrap> {

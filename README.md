@@ -82,6 +82,10 @@ Power the gateway near the traps. When one advertises, the log shows
 
 and the slot fills in. Rename the device in Home Assistant; the name is kept. A trap keeps its slot until you press **Forget Trap**. A sleeping A24 is not seen until it fires or is woken (shake it, or open the app nearby).
 
+### 6. Add a dashboard card (optional)
+
+[Rodent Trap Card](https://github.com/kedube/ha-rodent-traps) is a companion Home Assistant card that shows each trap at a glance: kill alert, strikes, battery, lure, CO₂ shots left, last seen and signal, with an animated A24 or Mouse Trap illustration. Pick a trap's device and the card fills in its entities and finds its **Clear Kill Alert**, **Lure Replaced** and **CO2 Canister Replaced** buttons. Install it from HACS.
+
 ## Configuration
 
 Every option is a substitution in `settings.yaml`, passed through to the `goodnature_ble:` block in the gateway YAML.

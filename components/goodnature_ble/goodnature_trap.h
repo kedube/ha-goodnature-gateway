@@ -67,6 +67,21 @@ struct TrapPrefs {
   uint32_t last_seen;       // epoch seconds the trap was last heard
 } __attribute__((packed));
 
+// An A24's last battery and strike readings, kept in TrapCache where a
+// Mouse Trap keeps its log progress, so they are not blank after a gateway
+// restart until the trap next wakes (possibly weeks).
+struct A24ReadingsCache {
+  uint8_t voltage_raw;  // FAD1 or the advertisement; 0 = none
+  uint8_t resistance;   // valid with A24_CACHE_RESISTANCE
+  int8_t temperature;   // newest kill record's; valid with A24_CACHE_TEMPERATURE
+  uint8_t flags;        // A24_CACHE_* bits below
+} __attribute__((packed));
+static_assert(sizeof(A24ReadingsCache) == sizeof(uint32_t), "shares a u32 in TrapCache");
+static constexpr uint8_t A24_CACHE_RESISTANCE = 0x01;
+static constexpr uint8_t A24_CACHE_TEMPERATURE = 0x02;
+static constexpr uint8_t A24_CACHE_LOW_KNOWN = 0x04;
+static constexpr uint8_t A24_CACHE_LOW = 0x08;
+
 // Readings and log-scan progress kept in flash beside TrapPrefs so they
 // survive a gateway restart. Kept separate so TrapPrefs keeps its layout
 // (ESPHome rejects a stored record whose size changed, which would forget
@@ -76,7 +91,10 @@ struct TrapCache {
   uint8_t battery_percent;  // 0xFF = unknown
   uint8_t flags;            // CACHE_* bits below
   uint8_t co2_extra_shots;  // manual shots not represented by the counter since anchoring
-  uint32_t log_scanned_to;  // C20: striker log counted up to this epoch (0 = never)
+  union {
+    uint32_t log_scanned_to;  // C20: striker log counted up to this epoch (0 = never)
+    A24ReadingsCache a24;     // A24
+  };
   uint32_t last_full_scan;  // C20: epoch of the last replay of the whole log
   union {
     uint32_t test_fires;        // C20: USER striker events seen in the whole log

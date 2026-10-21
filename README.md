@@ -126,8 +126,8 @@ Lure and CO2 timers start when a trap is discovered, on the assumption it was ju
 | **Strike** | event | `strike` when the count goes up, `test_fire` on a Mouse Trap test fire (an A24 fired by hand is a `strike`). Use this for automations. |
 | **Last Strike** | text, timestamp | A24: the newest kill record's time, to the minute. Mouse Trap: the trap's own timestamp on its last kill. Test fires do not move it. |
 | **Battery** | sensor, % | A24: registered only with the `a24_battery_*_raw` calibration. Mouse Trap: from each poll; kept across restarts. |
-| **Battery Low** | binary, battery | The trap's own low-battery flag in its advertisement. Mouse Trap: also at 20 % or below, the app's low-battery threshold. A24: also at or below `a24_battery_low_percent` with the calibration. |
-| **Battery Status** | text, diagnostic | The app's label. A24: `Full`, `Medium`, `Low` or `Critical` from the battery's internal resistance (the one capture read `Critical` from a working battery, so treat it as a trend). Mouse Trap: `Charging`, `Charged` (plugged in, done), or by level `Full` (85 %+), `Good` (45 %+), `Ok` (15 %+), `Low` (5 %+), `Empty`. |
+| **Battery Low** | binary, battery | The trap's own low-battery flag in its advertisement. Mouse Trap: also at 20 % or below, the app's low-battery threshold. A24: also at or below `a24_battery_low_percent` with the calibration; the flag is kept across restarts. |
+| **Battery Status** | text, diagnostic | The app's label. A24: `Full`, `Medium`, `Low` or `Critical` from the battery's internal resistance, kept across restarts (an early capture read `Critical` from a working battery, while two traps later read `Full`, so treat it as a trend). Mouse Trap: `Charging`, `Charged` (plugged in, done), or by level `Full` (85 %+), `Good` (45 %+), `Ok` (15 %+), `Low` (5 %+), `Empty`. |
 | **Trap Error** | binary, problem | Mouse Trap: the device state is ERROR; the app's advice is to restart the trap by holding its button until it flashes white. A24: on when the trap logs an error record other than the one it logs whenever it hangs up on the end of a session, and kept, across restarts, until **Clear Trap Error**. |
 | **Lure Age**, **Lure Remaining** | sensor, days | From the lure replacement date and **Lure Life**. |
 | **Lure Due** | binary, problem | On when Lure Remaining ≤ 0. |
@@ -149,9 +149,9 @@ Lure and CO2 timers start when a trap is discovered, on the assumption it was ju
 
 | Entity | Type | Notes |
 |---|---|---|
-| **Battery Voltage** | sensor, V, diagnostic | From the advertisement or `FAD1`: raw ÷ 255 × 3.6 V, as the app reads it. |
-| **Battery Internal Resistance** | sensor, diagnostic, disabled | Raw reading behind **Battery Status**; units unknown. |
-| **Last Strike Temperature** | sensor, °C | Air temperature in the newest kill record. |
+| **Battery Voltage** | sensor, V, diagnostic | From the advertisement or `FAD1`: raw ÷ 255 × 3.6 V, as the app reads it. Kept across restarts. |
+| **Battery Internal Resistance** | sensor, diagnostic, disabled | Raw reading behind **Battery Status**; units unknown. Kept across restarts. |
+| **Last Strike Temperature** | sensor, °C | Air temperature in the newest kill record. Kept across restarts. |
 | **CO2 Shots Remaining** | sensor | `co2_capacity` minus strikes since **CO2 Canister Replaced**, minus one per `co2_leak_days` in the trap, as the app counts. |
 | **CO2 Low** | binary, problem | On at or below `co2_low_threshold`. |
 | **CO2 Replaced On** | date, config | The canister replacement date. Setting it re-anchors the shot count at the current **Strikes** (the gateway has no per-strike history to count from an earlier day). |
